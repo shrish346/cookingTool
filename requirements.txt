@@ -1,0 +1,5 @@
+yt-dlp
+openai
+opencv-python
+pydantic
+python-dotenv
