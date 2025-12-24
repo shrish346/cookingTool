@@ -16,13 +16,12 @@ class FrameExtractor:
 
         try:
             fps = vid.get(cv2.CAP_PROP_FPS)
-            frame_count = int(vid.get(cv2.CAP_PROP_FRAME_COUNT))
+            frame_count = int(vid.get(cv2.CAP_PROP_FRAME_COUNT)) # has to be an int for range() to work
             duration = frame_count / fps
             frame_interval = duration / frame_limit
             interval = int(frame_interval * fps)
 
-            for i in range(0, frame_count):
-                frame_number = int(i * interval)
+            for i in range(0, frame_count, interval):
                 vid.set(cv2.CAP_PROP_POS_FRAMES, i)
                 success, frame = vid.read()
                 if not success:
