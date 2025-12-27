@@ -27,7 +27,7 @@ class YouTubeDownloader:
         
         ydl_opts = {
             'outtmpl': os.path.join(temp_dir_path, '%(title)s.%(ext)s'),
-            'format': 'worst[ext=mp4]/worst',  # Lower quality for smaller files
+            'format': 'best[height<=480][ext=mp4]/best[height<=480]/worst',  # Lower quality for smaller files
             'quiet': True,
             'no_warnings': True,
         }

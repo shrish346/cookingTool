@@ -25,7 +25,7 @@ class FrameExtractor:
                 vid.set(cv2.CAP_PROP_POS_FRAMES, i)
                 success, frame = vid.read()
                 if not success:
-                    raise RuntimeError(f"Failed to read frame {i}")
+                    continue  # Skip corrupted frames instead of crashing
                 frame = cv2.resize(frame, (self.resize_width, int(frame.shape[0] * self.resize_width / frame.shape[1])))
                 _, buffer = cv2.imencode('.jpg', frame)
                 frames.append(base64.b64encode(buffer).decode('utf-8'))

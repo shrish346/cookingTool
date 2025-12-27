@@ -16,6 +16,7 @@ class Step(BaseModel):
 class Recipe(BaseModel):
     title: str
     description: Optional[str] = None
+    reasoning: Optional[str] = Field(default=None, description="Model's thought process for extracting this recipe")
     ingredients: list[Ingredient]
     steps: list[Step]
     servings: int = Field(gt=0)

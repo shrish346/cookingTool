@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 import os
 import json
 import re
+
 from openai import OpenAI
 from dotenv import load_dotenv
 
 from ..downloaders.base import VideoInfo
-from ..schemas import Recipe, Ingredient, Step
+from ..schemas import Recipe
 
 load_dotenv()
 
@@ -25,18 +28,24 @@ class OpenRouterAdapter:
         """Return the model identifier."""
         return self._model
 
-    def analyze_recipe(self, video_info: VideoInfo, frames: list[str]) -> Recipe:
+    def analyze_recipe(
+        self, 
+        video_info: VideoInfo, 
+        frames: list[str],
+        transcript: str | None = None
+    ) -> Recipe:
         """
         Analyze video frames and return a structured Recipe.
         
         Args:
             video_info: Metadata about the video (title, description, etc.)
             frames: List of base64-encoded JPEG images
+            transcript: Optional audio transcript from the video
             
         Returns:
             A validated Recipe object
         """
-        messages = self._build_messages(video_info, frames)
+        messages = self._build_messages(video_info, frames, transcript)
         
         response = self._client.chat.completions.create(
             model=self._model,
@@ -48,16 +57,29 @@ class OpenRouterAdapter:
         content = response.choices[0].message.content
         return self._parse_response(content, video_info)
 
-    def _build_prompt(self, video_info: VideoInfo) -> str:
+    def _build_prompt(self, video_info: VideoInfo, transcript: str | None = None) -> str:
         """Create the instruction prompt for the VLM."""
+        transcript_section = ""
+        if transcript:
+            transcript_section = f"""
+Audio Transcript: {transcript}
+
+Use BOTH the visual frames AND the audio transcript to extract the recipe. The transcript often contains spoken instructions, ingredient amounts, and tips that may not be visible in the frames.
+"""
+        else:
+            transcript_section = """
+(No audio transcript available - extract recipe from visual frames only)
+"""
+
         return f"""You are analyzing frames from a cooking video to extract a recipe.
 
 Video Title: {video_info.title}
 Video Description: {video_info.description or "Not provided"}
-
-Analyze these frames carefully and extract the complete recipe. Return your response as a JSON object with this exact structure:
+{transcript_section}
+Analyze carefully and extract the complete recipe. Return your response as a JSON object with this exact structure:
 
 {{
+    "reasoning": "Explain your thought process here: what you observed in the frames, how you identified ingredients and steps, any uncertainties or assumptions you made",
     "title": "Recipe name",
     "description": "Brief description of the dish",
     "servings": 4,
@@ -78,13 +100,19 @@ Analyze these frames carefully and extract the complete recipe. Return your resp
 }}
 
 Rules:
+- reasoning should describe what you see in the frames and how you deduced the recipe
 - quantity must be a positive number (use decimals like 0.5 for "half")
 - order must start at 1 and increment
 - Include ALL ingredients and steps you can identify from the video
 - If you can't determine a value, omit that field (don't guess wildly)
 - Return ONLY the JSON object, no other text"""
 
-    def _build_messages(self, video_info: VideoInfo, frames: list[str]) -> list[dict]:
+    def _build_messages(
+        self, 
+        video_info: VideoInfo, 
+        frames: list[str],
+        transcript: str | None = None
+    ) -> list[dict]:
         """
         Build the multi-modal message array for the API.
         
@@ -92,7 +120,7 @@ Rules:
         """
         # Start with the text instruction
         content = [
-            {"type": "text", "text": self._build_prompt(video_info)}
+            {"type": "text", "text": self._build_prompt(video_info, transcript)}
         ]
         
         # Add each frame as an image
