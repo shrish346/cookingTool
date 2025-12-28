@@ -146,7 +146,7 @@ Rules:
         if json_match:
             json_str = json_match.group(1)
         else:
-            # Maybe it's raw JSON - find the outermost braces
+            # if it's raw JSON - find the outermost braces
             start = content.find("{")
             end = content.rfind("}") + 1
             if start != -1 and end > start:
@@ -159,6 +159,20 @@ Rules:
         
         # Add source URL from video info
         data["source_url"] = video_info.url
+        
+        # Provide defaults for required fields if missing (handles non-cooking videos or incomplete responses)
+        if not data.get("title") or not isinstance(data.get("title"), str):
+            data["title"] = video_info.title or "Untitled Recipe"
+        
+        # Ensure ingredients and steps are lists (even if empty)
+        if not isinstance(data.get("ingredients"), list):
+            data["ingredients"] = []
+        if not isinstance(data.get("steps"), list):
+            data["steps"] = []
+        
+        # Validate and default servings (required field)
+        if data.get("servings") is None or not isinstance(data.get("servings"), int) or data.get("servings") <= 0:
+            data["servings"] = 1  # Default to 1 serving if missing/invalid
         
         # Convert to Recipe (Pydantic handles validation)
         return Recipe(**data)

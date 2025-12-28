@@ -1,6 +1,5 @@
 import yt_dlp
 import tempfile
-import os
 from pathlib import Path
 from typing import Optional
 from .base import VideoInfo, VideoDownloader
@@ -26,7 +25,7 @@ class YouTubeDownloader:
         temp_dir_path = self._temp_dir.name
         
         ydl_opts = {
-            'outtmpl': os.path.join(temp_dir_path, '%(title)s.%(ext)s'),
+            'outtmpl': str(Path(temp_dir_path) / '%(title)s.%(ext)s'),
             'format': 'best[height<=480][ext=mp4]/best[height<=480]/worst',  # Lower quality for smaller files
             'quiet': True,
             'no_warnings': True,
