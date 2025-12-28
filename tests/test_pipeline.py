@@ -1,9 +1,15 @@
 """
 Test the full pipeline: Download -> Extract Frames -> Analyze with VLM
 """
+import sys
+from pathlib import Path
+
+# Add project root to Python path for cross-platform imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 import base64
 import shutil
-from pathlib import Path
 
 from src.downloaders.youtube import YouTubeDownloader
 from src.processing.frames import FrameExtractor
@@ -13,7 +19,7 @@ from src.vlm.openrouter import OpenRouterAdapter
 FRAMES_DIR = Path("frames")
 
 # Use a short cooking video for testing (regular video, not Shorts - more reliable)
-TEST_URL = "https://www.youtube.com/shorts/-2t0WNgtsZI"  # 3-min eggs recipe
+TEST_URL = "https://www.youtube.com/shorts/uqE1tpxvcNo"  # 3-min eggs recipe
 
 def main():
     downloader = YouTubeDownloader()
