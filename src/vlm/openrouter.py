@@ -5,6 +5,7 @@ import json
 import re
 import warnings
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -73,72 +74,60 @@ class OpenRouterAdapter:
         video_info: VideoInfo,
         frames: list[str],
         transcript: str | None = None,
-        chunk_size: int = 5
+        chunk_size: int = 12,
+        max_workers: int = 4
     ) -> list[SceneDescription]:
         """
         Analyze video frames and return structured scene descriptions.
         
-        Uses adaptive processing: batches similar frames together, processes key frames individually.
+        Processes frames in chunks in parallel for faster analysis.
         
         Args:
             video_info: Metadata about the video (title, description, etc.)
             frames: List of base64-encoded JPEG images
             transcript: Optional audio transcript from the video
-            chunk_size: Number of frames to process in each batch (for adaptive processing)
+            chunk_size: Number of frames to process in each batch (default 12 for ~3 chunks per 36 frames)
+            max_workers: Maximum number of parallel API calls (default 4)
             
         Returns:
-            List of SceneDescription objects, one per frame or chunk
+            List of SceneDescription objects, one per chunk
         """
+        # Build list of chunks to process
+        chunks = []
+        for start_idx in range(0, len(frames), chunk_size):
+            end_idx = min(start_idx + chunk_size, len(frames))
+            chunk_indices = list(range(start_idx, end_idx))
+            chunk_frames = [frames[i] for i in chunk_indices]
+            chunks.append((start_idx, chunk_indices, chunk_frames))
+        
+        print(f"      Processing {len(frames)} frames in {len(chunks)} chunks (parallel, max {max_workers} workers)...")
+        
         scene_descriptions = []
         
-        # Adaptive processing: process frames in chunks, but also process key frames
-        # Key frames are: first, last, and every nth frame (where n = chunk_size)
-        key_frame_indices = {0, len(frames) - 1}  # First and last
-        for i in range(0, len(frames), chunk_size):
-            key_frame_indices.add(i)
-        
-        processed_indices = set()
-        
-        # Process key frames individually for detailed analysis
-        for idx in sorted(key_frame_indices):
-            if idx < len(frames):
-                try:
-                    scene = self.analyze_frame_batch(
-                        video_info,
-                        [frames[idx]],
-                        transcript,
-                        frame_index=idx
-                    )
-                    scene_descriptions.append(scene)
-                    processed_indices.add(idx)
-                except Exception as e:
-                    # Continue with partial data on failure
-                    warnings.warn(f"Failed to process key frame {idx}: {e}", RuntimeWarning)
-        
-        # Process remaining frames in chunks
-        for start_idx in range(0, len(frames), chunk_size):
-            chunk_indices = list(range(start_idx, min(start_idx + chunk_size, len(frames))))
-            # Skip if all frames in chunk were already processed as key frames
-            if all(idx in processed_indices for idx in chunk_indices):
-                continue
-            
-            chunk_frames = [frames[i] for i in chunk_indices if i not in processed_indices]
-            if not chunk_frames:
-                continue
-            
-            try:
-                scene = self.analyze_frame_batch(
+        # Process chunks in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all chunk processing tasks
+            future_to_chunk = {
+                executor.submit(
+                    self.analyze_frame_batch,
                     video_info,
                     chunk_frames,
                     transcript,
-                    frame_index=start_idx,
-                    frame_indices=chunk_indices
-                )
-                scene_descriptions.append(scene)
-                processed_indices.update(chunk_indices)
-            except Exception as e:
-                # Continue with partial data on failure
-                warnings.warn(f"Failed to process chunk starting at frame {start_idx}: {e}", RuntimeWarning)
+                    start_idx,
+                    chunk_indices
+                ): (start_idx, chunk_indices)
+                for start_idx, chunk_indices, chunk_frames in chunks
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_chunk):
+                start_idx, chunk_indices = future_to_chunk[future]
+                try:
+                    scene = future.result()
+                    scene_descriptions.append(scene)
+                except Exception as e:
+                    # Continue with partial data on failure
+                    warnings.warn(f"Failed to process chunk starting at frame {start_idx}: {e}", RuntimeWarning)
         
         # Sort by frame_index to maintain temporal order
         scene_descriptions.sort(key=lambda s: s.frame_index)
@@ -469,4 +458,3 @@ Rules:
         
         # Convert to SceneDescription (Pydantic handles validation)
         return SceneDescription(**data)
-
