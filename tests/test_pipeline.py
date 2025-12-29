@@ -3,6 +3,7 @@ Test the full pipeline: Download -> Extract Frames -> Analyze with VLM -> Genera
 """
 import sys
 from pathlib import Path
+import time
 
 # Add project root to Python path for cross-platform imports
 project_root = Path(__file__).parent.parent
@@ -67,9 +68,13 @@ def main():
         print()
         
         # Step 4: Test two-stage pipeline (VLM → LLM)
-        print("[4/5] Analyzing scenes with VLM (this may take 30-60 seconds)...")
+
+        print("[4/5] Analyzing scenes with VLM (parallel processing)...")
+        start = time.perf_counter()
         vlm_adapter = OpenRouterAdapter()
-        scene_descriptions = vlm_adapter.analyze_scenes(video_info, frames, transcript, chunk_size=5)
+        scene_descriptions = vlm_adapter.analyze_scenes(video_info, frames, transcript, chunk_size=12)
+        end = time.perf_counter()
+        print(f"      Time taken: {end - start:.2f} seconds")
         print(f"      Generated {len(scene_descriptions)} scene descriptions")
         
         # Show sample scene description
@@ -169,7 +174,7 @@ def test_recipe_chef():
             save_scenes_path="test_scenes.json"
         )
         
-        recipe = chef.generate_recipe(video_info, frames, transcript, chunk_size=5)
+        recipe = chef.generate_recipe(video_info, frames, transcript, chunk_size=12)
         
         print("\n" + "="*50)
         print("RECIPE FROM CHEF")
@@ -196,4 +201,3 @@ if __name__ == "__main__":
         test_recipe_chef()
     else:
         main()
-
