@@ -16,7 +16,7 @@ load_dotenv()
 class OpenAIAdapter:
     """Adapter for OpenAI's language models (GPT-4, GPT-3.5)."""
 
-    def __init__(self, model: str = "gpt-4"):
+    def __init__(self, model: str = "gpt-4.1"):
         self._model = model
         self._client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -89,7 +89,7 @@ Your task:
 1. Cross-reference all ingredients across scenes to build a complete ingredient list
 2. Resolve temporal ordering from the scene descriptions to create step-by-step instructions
 3. Infer quantities, units, and preparation methods from the scene descriptions
-4. Format everything into a professional recipe based on the video description and transcript
+4. Format everything into a professional recipe
 
 Return your response as a JSON object with this exact structure:
 
