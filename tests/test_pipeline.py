@@ -17,13 +17,14 @@ from src.processing.frames import FrameExtractor
 from src.processing.audio import AudioTranscriber
 from src.vlm.openrouter import OpenRouterAdapter
 from src.llm.openrouter import OpenRouterLLMAdapter
+from src.llm.openai import OpenAIAdapter
 from src.chef import RecipeChef
 from src.schemas import SceneLog, SceneDescription
 
 FRAMES_DIR = Path("frames")
 
 # Use a short cooking video for testing (regular video, not Shorts - more reliable)
-TEST_URL = "https://www.youtube.com/shorts/-2t0WNgtsZI"  # 3-min eggs recipe
+TEST_URL = "https://www.youtube.com/shorts/-2t0WNgtsZI" 
 
 def main():
     downloader = YouTubeDownloader()
@@ -87,7 +88,7 @@ def main():
         
         # Step 5: Generate recipe with LLM
         print("[5/5] Generating recipe with LLM (this may take 30-60 seconds)...")
-        llm_adapter = OpenRouterLLMAdapter()
+        llm_adapter = OpenAIAdapter()
         scene_log = SceneLog(
             scenes=scene_descriptions,
             video_info={
