@@ -1,0 +1,26 @@
+# FastAPI and server
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+
+# Async support
+httpx>=0.28.0
+anyio>=4.0.0
+
+# Redis (Upstash compatible)
+redis>=5.0.0
+
+# AWS S3
+boto3>=1.35.0
+
+# Video processing (from main project)
+yt-dlp>=2025.10.0
+opencv-python>=4.10.0
+
+# AI providers
+openai>=2.0.0
+
+# Environment
+python-dotenv>=1.0.0
+
