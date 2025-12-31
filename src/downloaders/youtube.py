@@ -2,7 +2,7 @@ import yt_dlp
 import tempfile
 from pathlib import Path
 from typing import Optional
-from .base import VideoInfo, VideoDownloader
+from .base import VideoInfo, VideoDownloader, VideoMetadata
 
 
 class YouTubeDownloader:
@@ -68,3 +68,25 @@ class YouTubeDownloader:
         if self._temp_dir:
             self._temp_dir.cleanup()
             self._temp_dir = None
+    
+    def get_info(self, url: str) -> Optional[VideoMetadata]:
+        """
+        Get video metadata without downloading.
+        Used for deep validation to check if video exists and is accessible.
+        """
+        try:
+            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+                info = ydl.extract_info(url, download=False)
+                
+                if info is None:
+                    return None
+                
+                return VideoMetadata(
+                    title=info.get('title', 'Unknown'),
+                    video_id=info.get('id', ''),
+                    duration_seconds=int(info.get('duration', 0)),
+                    thumbnail_url=info.get('thumbnail'),
+                    description=info.get('description'),
+                )
+        except Exception:
+            return None

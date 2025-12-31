@@ -9,9 +9,14 @@ class Ingredient(BaseModel):
 
 class Step(BaseModel):
     order: int = Field(ge=1)
+    title: str = Field(description="Short title for this step (e.g., 'Boil the Pasta')")
     instruction: str
     duration_minutes: Optional[int] = None
     tips: Optional[list[str]] = None
+    # Video loop fields for the Cooking Mode
+    start_frame_index: Optional[int] = Field(default=None, ge=0, description="Frame index where this step starts in the video")
+    end_frame_index: Optional[int] = Field(default=None, ge=0, description="Frame index where this step ends in the video")
+    video_clip_url: Optional[str] = Field(default=None, description="S3 URL for the extracted video clip")
 
 class Recipe(BaseModel):
     title: str
@@ -36,6 +41,10 @@ class Recipe(BaseModel):
     vitamin_a: Optional[int] = None
     vitamin_c: Optional[int] = None
     calcium: Optional[int] = None
+    # Video metadata for caching and clip extraction
+    video_id: Optional[str] = Field(default=None, description="YouTube/TikTok video ID for caching")
+    video_fps: Optional[float] = Field(default=None, gt=0, description="Source video FPS for timestamp calculations")
+    clips_ready: bool = Field(default=False, description="Whether all video clips have been uploaded to S3")
 
     @computed_field
     @property
