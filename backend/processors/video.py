@@ -27,7 +27,8 @@ class VideoClipExtractor:
         video_path: str,
         video_id: str,
         steps: list[dict],
-        fps: float = 30.0
+        fps: float = 30.0,
+        frame_interval: int = 1
     ) -> list[dict]:
         """
         Extract video clips for each step and upload to S3.
@@ -37,24 +38,41 @@ class VideoClipExtractor:
             video_id: Unique video identifier for S3 folder
             steps: List of step dictionaries with frame indices
             fps: Video frames per second for timestamp calculation
+            frame_interval: Multiplier to convert scene indices to actual frame numbers
             
         Returns:
             Updated steps list with video_clip_url populated
         """
+        # Ensure fps is valid
+        if fps is None or fps <= 0:
+            fps = 30.0
+        if frame_interval is None or frame_interval < 1:
+            frame_interval = 1
+        
         updated_steps = []
+        
+        print(f"[ClipExtractor] Processing {len(steps)} steps with fps={fps}, frame_interval={frame_interval}")
         
         with tempfile.TemporaryDirectory() as temp_dir:
             for step in steps:
-                start_frame = step.get("start_frame_index")
-                end_frame = step.get("end_frame_index")
+                # Scene indices from LLM (0-34 range typically)
+                scene_start = step.get("start_frame_index")
+                scene_end = step.get("end_frame_index")
                 step_order = step.get("order", 1)
                 
                 # Skip if no frame indices
-                if start_frame is None or end_frame is None:
+                if scene_start is None or scene_end is None:
+                    print(f"[ClipExtractor] Skipping step {step_order} - no frame indices")
                     updated_steps.append(step)
                     continue
                 
-                # Calculate timestamps from frame indices
+                # Convert scene indices to actual frame numbers
+                start_frame = scene_start * frame_interval
+                end_frame = scene_end * frame_interval
+                
+                print(f"[ClipExtractor] Step {step_order}: scene={scene_start}-{scene_end} -> frames={start_frame}-{end_frame}")
+                
+                # Calculate timestamps from actual frame numbers
                 start_time = start_frame / fps
                 end_time = end_frame / fps
                 duration = end_time - start_time
@@ -63,9 +81,11 @@ class VideoClipExtractor:
                 if duration < 2:
                     duration = 2
                 
-                # Extract clip
-                clip_filename = f"step_{step_order}.{self.settings.clip_format}"
+                # Extract clip (always use mp4 for compatibility)
+                clip_filename = f"step_{step_order}.mp4"
                 clip_path = os.path.join(temp_dir, clip_filename)
+                
+                print(f"[ClipExtractor] Extracting clip: start={start_time:.2f}s, duration={duration:.2f}s")
                 
                 success = self._extract_clip(
                     video_path=video_path,
@@ -77,13 +97,20 @@ class VideoClipExtractor:
                 if success and os.path.exists(clip_path):
                     # Upload to S3
                     s3_key = f"{video_id}/{clip_filename}"
-                    clip_url = self._upload_to_s3(clip_path, s3_key)
-                    
-                    # Update step with clip URL
-                    step_copy = step.copy()
-                    step_copy["video_clip_url"] = clip_url
-                    updated_steps.append(step_copy)
+                    print(f"[ClipExtractor] Uploading to S3: {s3_key}")
+                    try:
+                        clip_url = self._upload_to_s3(clip_path, s3_key)
+                        print(f"[ClipExtractor] Success! URL: {clip_url}")
+                        
+                        # Update step with clip URL
+                        step_copy = step.copy()
+                        step_copy["video_clip_url"] = clip_url
+                        updated_steps.append(step_copy)
+                    except Exception as e:
+                        print(f"[ClipExtractor] S3 upload failed: {e}")
+                        updated_steps.append(step)
                 else:
+                    print(f"[ClipExtractor] FFmpeg extraction failed for step {step_order}")
                     # Keep step without clip URL
                     updated_steps.append(step)
         
@@ -103,6 +130,7 @@ class VideoClipExtractor:
         """
         try:
             # FFmpeg command for low-bitrate clip extraction without audio
+            # Use MP4 with libx264 for maximum compatibility
             cmd = [
                 self.settings.ffmpeg_path,
                 "-y",  # Overwrite output
@@ -111,15 +139,14 @@ class VideoClipExtractor:
                 "-t", str(duration),  # Duration
                 "-an",  # No audio
                 "-vf", "scale=640:-2",  # Scale to 640px width, maintain aspect ratio
-                "-b:v", self.settings.clip_bitrate,  # Low bitrate
-                "-c:v", "libvpx-vp9" if self.settings.clip_format == "webm" else "libx264",
-                "-crf", "30",  # Quality (higher = lower quality/smaller file)
-                "-preset", "fast" if self.settings.clip_format == "mp4" else "",
+                "-c:v", "libx264",  # Use H.264 codec (widely supported)
+                "-preset", "fast",  # Encoding speed
+                "-crf", "28",  # Quality (lower = better quality, 18-28 is good range)
+                "-movflags", "+faststart",  # Enable streaming
                 output_path
             ]
             
-            # Remove empty strings from command
-            cmd = [c for c in cmd if c]
+            print(f"[FFmpeg] Running: {' '.join(cmd)}")
             
             result = subprocess.run(
                 cmd,
@@ -127,6 +154,9 @@ class VideoClipExtractor:
                 text=True,
                 timeout=60  # 60 second timeout per clip
             )
+            
+            if result.returncode != 0:
+                print(f"[FFmpeg] STDERR: {result.stderr[:500]}")
             
             return result.returncode == 0
             
@@ -139,7 +169,7 @@ class VideoClipExtractor:
         """
         Upload a file to S3 and return the public URL.
         """
-        content_type = "video/webm" if s3_key.endswith(".webm") else "video/mp4"
+        content_type = "video/mp4"  # Always use mp4
         
         self.s3.upload_file(
             file_path,
@@ -154,6 +184,63 @@ class VideoClipExtractor:
         # Return a region-aware virtual-hosted–style S3 URL.
         # Using the region hostname avoids 301 redirects for buckets outside us-east-1.
         return f"https://{self.bucket_name}.s3.{self.settings.aws_region}.amazonaws.com/{s3_key}"
+    
+    def get_total_frames(self, video_path: str) -> int:
+        """
+        Get the total number of frames in a video using FFprobe.
+        """
+        try:
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-count_frames",
+                "-show_entries", "stream=nb_read_frames",
+                "-of", "csv=p=0",
+                video_path
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                return int(result.stdout.strip())
+        except Exception:
+            pass
+        
+        # Fallback: estimate from duration and fps
+        fps = self.get_video_fps(video_path)
+        duration = self._get_video_duration(video_path)
+        return int(fps * duration) if duration > 0 else 1000
+    
+    def _get_video_duration(self, video_path: str) -> float:
+        """Get video duration in seconds."""
+        try:
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "csv=p=0",
+                video_path
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                return float(result.stdout.strip())
+        except Exception:
+            pass
+        
+        return 0.0
     
     def get_video_fps(self, video_path: str) -> float:
         """
