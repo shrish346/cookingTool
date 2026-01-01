@@ -151,8 +151,9 @@ class VideoClipExtractor:
             }
         )
         
-        # Return the S3 URL
-        return f"https://{self.bucket_name}.s3.amazonaws.com/{s3_key}"
+        # Return a region-aware virtual-hosted–style S3 URL.
+        # Using the region hostname avoids 301 redirects for buckets outside us-east-1.
+        return f"https://{self.bucket_name}.s3.{self.settings.aws_region}.amazonaws.com/{s3_key}"
     
     def get_video_fps(self, video_path: str) -> float:
         """
