@@ -9,7 +9,7 @@ class Ingredient(BaseModel):
 
 class Step(BaseModel):
     order: int = Field(ge=1)
-    title: str = Field(description="Short title for this step (e.g., 'Boil the Pasta')")
+    title: Optional[str] = Field(default=None, description="Short title for this step (e.g., 'Boil the Pasta')")
     instruction: str
     duration_minutes: Optional[int] = None
     tips: Optional[list[str]] = None
@@ -17,6 +17,16 @@ class Step(BaseModel):
     start_frame_index: Optional[int] = Field(default=None, ge=0, description="Frame index where this step starts in the video")
     end_frame_index: Optional[int] = Field(default=None, ge=0, description="Frame index where this step ends in the video")
     video_clip_url: Optional[str] = Field(default=None, description="S3 URL for the extracted video clip")
+    
+    @computed_field
+    @property
+    def display_title(self) -> str:
+        """Auto-generate a title from instruction if not provided."""
+        if self.title:
+            return self.title
+        # Take first 5 words of instruction as title
+        words = self.instruction.split()[:5]
+        return ' '.join(words) + ('...' if len(self.instruction.split()) > 5 else '')
 
 class Recipe(BaseModel):
     title: str

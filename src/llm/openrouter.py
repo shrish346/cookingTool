@@ -109,7 +109,15 @@ Return your response as a JSON object with this exact structure:
         {{"name": "ingredient name", "quantity": 2.0, "unit": "cups", "preparation": "diced"}}
     ],
     "steps": [
-        {{"order": 1, "instruction": "Step description", "duration_minutes": 5, "tips": ["optional tip"]}}
+        {{
+            "order": 1,
+            "title": "Short Step Title",
+            "instruction": "Detailed step description",
+            "duration_minutes": 5,
+            "tips": ["optional tip"],
+            "start_frame_index": 0,
+            "end_frame_index": 5
+        }}
     ],
     "calories": 450,
     "protein": 25,
@@ -127,6 +135,15 @@ Rules:
 - Infer quantities from state_changes and temporal_actions (e.g., "pouring 200ml milk" → quantity: 200, unit: "ml")
 - Combine similar steps if they appear in multiple scenes
 - For optional fields (prep_time_minutes, cook_time_minutes, calories, etc.), you can omit if unknown
+
+VIDEO CLIP MAPPING (CRITICAL):
+- Each step MUST have "title" (short 2-4 word title like "Boil the Pasta")
+- Each step MUST have "start_frame_index" and "end_frame_index" from the scene descriptions
+- Look at which Scene/Frame numbers correspond to each cooking action
+- start_frame_index = the frame where this step BEGINS
+- end_frame_index = the frame where this step ENDS (before the next step starts)
+- These frame indices will be used to extract video clips for each step
+
 - Return ONLY the JSON object, no other text"""
 
     def _format_scene_log(self, scene_log: SceneLog) -> str:
