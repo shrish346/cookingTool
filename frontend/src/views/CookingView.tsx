@@ -1,0 +1,146 @@
+import { useState, useEffect, useRef } from 'react'
+import { RotateOverlay } from '../components'
+import type { Recipe, Step } from '../types'
+
+interface CookingViewProps {
+  recipe: Recipe
+  onExit: () => void
+  onViewRecipe: () => void
+}
+
+/**
+ * Landscape cooking mode with video loops and step navigation
+ */
+export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) {
+  const [currentStep, setCurrentStep] = useState(0)
+  const videoRef = useRef<HTMLVideoElement>(null)
+
+  const step: Step = recipe.steps[currentStep]
+  const totalSteps = recipe.steps.length
+  const hasVideo = Boolean(step?.video_clip_url)
+
+  // Handle tap navigation
+  const handleTap = (e: React.MouseEvent | React.TouchEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    const clientX = 'touches' in e ? e.touches[0]?.clientX ?? 0 : e.clientX
+    const tapX = clientX - rect.left
+    const halfWidth = rect.width / 2
+
+    if (tapX < halfWidth) {
+      // Tap left - previous step
+      setCurrentStep((prev) => Math.max(0, prev - 1))
+    } else {
+      // Tap right - next step
+      setCurrentStep((prev) => Math.min(totalSteps - 1, prev + 1))
+    }
+  }
+
+  // Auto-play video when step changes
+  useEffect(() => {
+    if (videoRef.current && hasVideo) {
+      videoRef.current.play().catch(() => {
+        // Autoplay might be blocked
+      })
+    }
+  }, [currentStep, hasVideo])
+
+  return (
+    <RotateOverlay>
+      <div
+        className="cooking-mode flex"
+        onClick={handleTap}
+        onTouchStart={handleTap}
+      >
+        {/* Left panel - Step info */}
+        <div className="flex-1 flex flex-col justify-between p-6 lg:p-8">
+          {/* Step counter */}
+          <div className="text-white/60 text-sm">
+            Step {currentStep + 1} of {totalSteps}
+          </div>
+
+          {/* Step title and instruction */}
+          <div className="flex-1 flex flex-col justify-center">
+            <h1 className="text-3xl lg:text-4xl font-display font-bold text-white mb-4">
+              {step.display_title || step.title || `Step ${step.order}`}
+            </h1>
+            <p className="text-white/90 text-lg lg:text-xl leading-relaxed max-w-lg">
+              {step.instruction}
+            </p>
+            {step.duration_minutes && (
+              <p className="text-white/60 mt-4">
+                ⏱️ {step.duration_minutes} minutes
+              </p>
+            )}
+          </div>
+
+          {/* Navigation buttons */}
+          <div className="flex items-center justify-center gap-4 text-white/80">
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onExit()
+              }}
+              className="hover:text-white transition-colors"
+            >
+              Exit
+            </button>
+            <span className="text-white/40">|</span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onViewRecipe()
+              }}
+              className="hover:text-white transition-colors"
+            >
+              View Recipe
+            </button>
+          </div>
+        </div>
+
+        {/* Right panel - Video loop */}
+        <div className="flex-1 flex items-center justify-center p-6">
+          <div className="relative w-full max-w-md aspect-square bg-peach-600/30 rounded-2xl overflow-hidden">
+            {hasVideo ? (
+              <video
+                ref={videoRef}
+                src={step.video_clip_url}
+                loop
+                muted
+                playsInline
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center text-white/60">
+                <svg className="w-16 h-16 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={1.5}
+                    d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+                  />
+                </svg>
+                <span className="text-sm">Video loop playing...</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Tap zones indicator (subtle) */}
+        <div className="absolute inset-0 pointer-events-none flex opacity-0 hover:opacity-100 transition-opacity">
+          <div className="flex-1 flex items-center justify-start pl-4">
+            {currentStep > 0 && (
+              <span className="text-white/30 text-4xl">‹</span>
+            )}
+          </div>
+          <div className="flex-1 flex items-center justify-end pr-4">
+            {currentStep < totalSteps - 1 && (
+              <span className="text-white/30 text-4xl">›</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </RotateOverlay>
+  )
+}
+
+

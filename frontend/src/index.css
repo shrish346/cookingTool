@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Global styles */
+:root {
+  --color-peach: #DB7256;
+  --color-peach-light: #E28B75;
+  --color-peach-dark: #C75435;
+  --color-cream: #FFF8F5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  background-color: var(--color-peach);
+  color: white;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Safe area support for notched devices */
+@supports (padding: max(0px)) {
+  body {
+    padding-left: max(0px, env(safe-area-inset-left));
+    padding-right: max(0px, env(safe-area-inset-right));
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* Glass card effect */
+@layer components {
+  .glass-card {
+    @apply bg-white/15 backdrop-blur-sm rounded-2xl;
+  }
+  
+  .btn-primary {
+    @apply bg-white text-peach font-medium py-4 px-8 rounded-full 
+           transition-all duration-200 hover:shadow-lg hover:scale-[1.02]
+           active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed
+           disabled:hover:scale-100;
+  }
+  
+  .input-field {
+    @apply w-full bg-white/90 text-gray-800 placeholder-gray-400
+           py-4 px-5 rounded-xl outline-none
+           focus:ring-2 focus:ring-white/50 transition-all;
+  }
+}
+
+/* Typography */
+.font-display {
+  font-family: 'Fraunces', Georgia, serif;
+}
+
+/* Landscape cooking mode */
+.cooking-mode {
+  position: fixed;
+  inset: 0;
+  background-color: var(--color-peach);
+  z-index: 50;
+}
+
+/* Progress bar animation */
+@keyframes progress {
+  0% { width: 0%; }
+}
+
+.progress-bar {
+  animation: progress 0.5s ease-out forwards;
+}
+
