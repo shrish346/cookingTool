@@ -1,0 +1,194 @@
+{
+  "scene": {
+    "video_duration_seconds": 49.0,
+    "entities": [
+      {
+        "name": "Person",
+        "type": "tool",
+        "first_seen_timestamp": 0.0,
+        "confidence": null,
+        "quantity": null,
+        "state": null
+      },
+      {
+        "name": "knife",
+        "type": "tool",
+        "first_seen_timestamp": 0.0,
+        "confidence": null,
+        "quantity": null,
+        "state": null
+      },
+      {
+        "name": "cutting board",
+        "type": "tool",
+        "first_seen_timestamp": 5.0,
+        "confidence": null,
+        "quantity": null,
+        "state": null
+      },
+      {
+        "name": "vegetables",
+        "type": "ingredient",
+        "first_seen_timestamp": 5.0,
+        "confidence": null,
+        "quantity": null,
+        "state": null
+      },
+      {
+        "name": "pot",
+        "type": "tool",
+        "first_seen_timestamp": 15.0,
+        "confidence": null,
+        "quantity": null,
+        "state": null
+      },
+      {
+        "name": "spoon",
+        "type": "tool",
+        "first_seen_timestamp": 25.0,
+        "confidence": null,
+        "quantity": null,
+        "state": null
+      },
+      {
+        "name": "oil",
+        "type": "ingredient",
+        "first_seen_timestamp": 40.0,
+        "confidence": null,
+        "quantity": null,
+        "state": null
+      },
+      {
+        "name": "bottle of oil",
+        "type": "tool",
+        "first_seen_timestamp": 40.0,
+        "confidence": null,
+        "quantity": null,
+        "state": null
+      }
+    ],
+    "state_changes": [],
+    "micro_actions": [
+      {
+        "id": 0,
+        "action": "Picks up a knife",
+        "timestamp_seconds": 0.0,
+        "duration_seconds": 5.0,
+        "entity": "knife",
+        "state_before": null,
+        "state_after": null,
+        "confidence": null,
+        "end_timestamp": 5.0
+      },
+      {
+        "id": 1,
+        "action": "Chops vegetables on a cutting board",
+        "timestamp_seconds": 5.0,
+        "duration_seconds": 5.0,
+        "entity": "vegetables",
+        "state_before": null,
+        "state_after": null,
+        "confidence": null,
+        "end_timestamp": 10.0
+      },
+      {
+        "id": 2,
+        "action": "Sets down the knife",
+        "timestamp_seconds": 10.0,
+        "duration_seconds": 5.0,
+        "entity": "knife",
+        "state_before": null,
+        "state_after": null,
+        "confidence": null,
+        "end_timestamp": 15.0
+      },
+      {
+        "id": 3,
+        "action": "Picks up a pot",
+        "timestamp_seconds": 15.0,
+        "duration_seconds": 5.0,
+        "entity": "pot",
+        "state_before": null,
+        "state_after": null,
+        "confidence": null,
+        "end_timestamp": 20.0
+      },
+      {
+        "id": 4,
+        "action": "Adds chopped vegetables into the pot",
+        "timestamp_seconds": 20.0,
+        "duration_seconds": 5.0,
+        "entity": "vegetables",
+        "state_before": null,
+        "state_after": null,
+        "confidence": null,
+        "end_timestamp": 25.0
+      },
+      {
+        "id": 5,
+        "action": "Picks up a spoon",
+        "timestamp_seconds": 25.0,
+        "duration_seconds": 5.0,
+        "entity": "spoon",
+        "state_before": null,
+        "state_after": null,
+        "confidence": null,
+        "end_timestamp": 30.0
+      },
+      {
+        "id": 6,
+        "action": "Stirs the contents of the pot",
+        "timestamp_seconds": 30.0,
+        "duration_seconds": 5.0,
+        "entity": "pot",
+        "state_before": null,
+        "state_after": null,
+        "confidence": null,
+        "end_timestamp": 35.0
+      },
+      {
+        "id": 7,
+        "action": "Sets down the spoon",
+        "timestamp_seconds": 35.0,
+        "duration_seconds": 5.0,
+        "entity": "spoon",
+        "state_before": null,
+        "state_after": null,
+        "confidence": null,
+        "end_timestamp": 40.0
+      },
+      {
+        "id": 8,
+        "action": "Picks up a bottle of oil",
+        "timestamp_seconds": 40.0,
+        "duration_seconds": 5.0,
+        "entity": "bottle of oil",
+        "state_before": null,
+        "state_after": null,
+        "confidence": null,
+        "end_timestamp": 45.0
+      },
+      {
+        "id": 9,
+        "action": "Pours oil into the pot",
+        "timestamp_seconds": 45.0,
+        "duration_seconds": 5.0,
+        "entity": "oil",
+        "state_before": null,
+        "state_after": null,
+        "confidence": null,
+        "end_timestamp": 50.0
+      }
+    ],
+    "summary": "A person chops vegetables, adds them to a pot, stirs the contents, and pours oil into the pot.",
+    "metadata": {
+      "method": "direct_video"
+    }
+  },
+  "video_info": {
+    "title": "EASY MEALS after WORK",
+    "description": "",
+    "url": "https://www.youtube.com/shorts/Ll307dapW64",
+    "duration_seconds": 49
+  }
+}
