@@ -312,31 +312,25 @@ async def run_pipeline(url: str, video_id: str, source: VideoSource):
         downloader = get_downloader(url)
         video_info = await asyncio.to_thread(downloader.download, url)
         video_path = str(video_info.file_path)
-        
         try:
-            # Step 2: Extract frames
-            await update_status("analyzing", 25, "Extracting frames...")
-            
-            extractor = FrameExtractor(resize_width=512)
-            frames = await asyncio.to_thread(extractor.extract, video_path)
-            
-            # Step 3: Transcribe audio
-            await update_status("analyzing", 40, "Transcribing audio...")
+            # Step 2: Transcribe audio
+            await update_status("analyzing", 25, "Transcribing audio...")
             
             transcriber = AudioTranscriber()
             transcript = await asyncio.to_thread(transcriber.process_video, video_path)
             
-            # Step 4: VLM + LLM pipeline
-            await update_status("generating", 55, "Analyzing cooking steps...")
+            # Step 3: VLM + LLM pipeline (using direct video upload to Gemini)
+            await update_status("generating", 50, "Analyzing cooking steps with video AI...")
             
-            vlm_adapter = OpenRouterAdapter()
+            vlm_adapter = OpenRouterAdapter()  # Defaults to google/gemini-2.0-flash-001
             llm_adapter = OpenAIAdapter()
             
             chef = RecipeChef(vlm_adapter=vlm_adapter, llm_adapter=llm_adapter)
+            # Use direct video upload (no frame extraction)
             recipe = await asyncio.to_thread(
-                chef.generate_recipe,
+                chef.generate_recipe_direct,
                 video_info,
-                frames,
+                video_path,
                 transcript
             )
             
@@ -361,10 +355,10 @@ async def run_pipeline(url: str, video_id: str, source: VideoSource):
             video_fps = await asyncio.to_thread(clip_extractor.get_video_fps, video_path)
             total_frames = await asyncio.to_thread(clip_extractor.get_total_frames, video_path)
             
-            # The VLM analyzed len(frames) evenly-spaced frames, so scene indices need to be
-            # converted back to actual frame numbers using the same interval
-            num_samples = len(frames)  # Actual number of frames the VLM analyzed
-            frame_interval = max(1, total_frames // num_samples) if num_samples > 0 else 1
+            # The dense extraction uses a target FPS of 2.0
+            # Frame interval = video_fps / target_fps
+            target_fps = 2.0
+            frame_interval = max(1, int(video_fps / target_fps))
             
             print(f"[ClipExtractor] Video: {total_frames} frames, fps={video_fps}, interval={frame_interval}")
             
