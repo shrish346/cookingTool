@@ -48,6 +48,9 @@ class RecipeChef:
         """
         Generate a recipe from video frames using the two-stage pipeline.
         
+        Legacy method using frame-based analysis.
+        For timestamp-based analysis, use generate_recipe_with_timestamps().
+        
         Args:
             video_info: Metadata about the video (title, description, etc.)
             frames: List of base64-encoded JPEG images
@@ -81,7 +84,85 @@ class RecipeChef:
             self._save_scene_log(scene_log)
         
         # Stage 2: LLM generates recipe from scene descriptions
-        recipe = self._llm.generate_recipe(scene_log, video_info, transcript)
+        recipe = self._llm.generate_recipe(scene_log, video_info, transcript, use_timestamps=False)
+        
+        return recipe
+
+    def generate_recipe_with_timestamps(
+        self,
+        video_info: VideoInfo,
+        video_path: str,
+        transcript: str | None = None,
+        target_fps: float = 2.0,
+        max_frames: int = 80,
+        chunk_size: int = 16
+    ) -> Recipe:
+        """
+        Generate a recipe using dense frame extraction with timestamps.
+        
+        This method extracts frames at a high rate and uses timestamp-based
+        mapping for more accurate video clip extraction.
+        
+        Args:
+            video_info: Metadata about the video (title, description, etc.)
+            video_path: Path to the local video file
+            transcript: Optional audio transcript from the video
+            target_fps: Frames per second to extract (default 2.0)
+            max_frames: Maximum frames to extract
+            chunk_size: Number of frames per VLM batch
+            
+        Returns:
+            A validated Recipe object with timestamp-based video clips
+        """
+        # Stage 1: VLM analyzes video with timestamps
+        scene_log = self._vlm.analyze_video_with_timestamps(
+            video_info,
+            video_path,
+            transcript,
+            target_fps=target_fps,
+            max_frames=max_frames,
+            chunk_size=chunk_size
+        )
+        
+        # Optionally save SceneLog for debugging/caching
+        if self._save_scenes_path:
+            self._save_scene_log(scene_log)
+        
+        # Stage 2: LLM generates recipe with timestamp-based mapping
+        recipe = self._llm.generate_recipe(scene_log, video_info, transcript, use_timestamps=True)
+        
+        return recipe
+
+    def generate_recipe_direct(
+        self,
+        video_info: VideoInfo,
+        video_path: str,
+        transcript: str | None = None
+    ) -> Recipe:
+        """
+        Generate a recipe by uploading video directly to a video-capable VLM.
+        
+        This method compresses and uploads the video directly (no frame extraction)
+        to a video-capable VLM like Gemini, leveraging M-RoPE for temporal grounding.
+        This is the most accurate method for timestamp-based clip extraction.
+        
+        Args:
+            video_info: Metadata about the video (title, description, etc.)
+            video_path: Path to the local video file
+            transcript: Optional audio transcript from the video
+            
+        Returns:
+            A validated Recipe object with timestamp-based video clips
+        """
+        # Stage 1: VLM analyzes video directly (no frame extraction)
+        scene_log = self._vlm.analyze_video_direct(video_info, video_path)
+        
+        # Optionally save SceneLog for debugging/caching
+        if self._save_scenes_path:
+            self._save_scene_log(scene_log)
+        
+        # Stage 2: LLM generates recipe with timestamp-based mapping
+        recipe = self._llm.generate_recipe(scene_log, video_info, transcript, use_timestamps=True)
         
         return recipe
 

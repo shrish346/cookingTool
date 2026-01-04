@@ -4,7 +4,7 @@ from typing import Protocol, runtime_checkable
 import warnings
 
 from ..downloaders.base import VideoInfo
-from ..schemas import Recipe, SceneDescription
+from ..schemas import Recipe, SceneDescription, SceneLog
 
 @runtime_checkable
 class VLMAdapter(Protocol):
@@ -60,6 +60,26 @@ class VLMAdapter(Protocol):
             
         Returns:
             A single SceneDescription representing the batch
+        """
+        ...
+
+    def analyze_video_direct(
+        self,
+        video_info: VideoInfo,
+        video_path: str,
+    ) -> SceneLog:
+        """
+        Analyze a video by uploading it directly (no frame extraction).
+        
+        This method compresses and uploads the video as base64 to a
+        video-capable VLM (like Gemini) for temporal analysis.
+        
+        Args:
+            video_info: Metadata about the video
+            video_path: Path to the local video file
+            
+        Returns:
+            SceneLog containing all micro-actions with timestamps
         """
         ...
 

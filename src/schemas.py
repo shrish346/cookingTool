@@ -16,7 +16,10 @@ class Step(BaseModel):
     # Micro-action based video mapping (V2 approach)
     micro_action_ids: Optional[list[int]] = Field(default=None, description="IDs of micro-actions that comprise this step")
     micro_action_descriptions: Optional[list[str]] = Field(default=None, description="Descriptions of micro-actions (for debugging)")
-    # Video loop fields for the Cooking Mode
+    # Timestamp-based video clip fields (preferred)
+    start_timestamp_seconds: Optional[float] = Field(default=None, ge=0, description="Start time in seconds for this step's video clip")
+    end_timestamp_seconds: Optional[float] = Field(default=None, ge=0, description="End time in seconds for this step's video clip")
+    # Frame-based video clip fields (legacy, for backward compatibility)
     start_frame_index: Optional[float] = Field(default=None, ge=0, description="Precise frame index where this step starts (from micro-actions)")
     end_frame_index: Optional[float] = Field(default=None, ge=0, description="Precise frame index where this step ends (from micro-actions)")
     has_video_clip: bool = Field(default=True, description="Whether this step has a matching video clip")
@@ -79,16 +82,23 @@ class MicroAction(BaseModel):
     """
     A single atomic cooking action with precise timing.
     
-    This enables accurate video clip extraction by tracking exactly when
-    each small action occurs within a scene/chunk.
+    Supports both frame-based (legacy) and timestamp-based (new) positioning.
+    Timestamp-based is preferred for accurate video clip extraction.
     """
     id: int = Field(ge=0, description="Unique ID for this micro-action within the video")
     action: str = Field(description="Brief action description (e.g., 'add salt', 'stir pan', 'flip chicken')")
-    frame_index: int = Field(ge=0, description="Chunk start frame index (0, 12, 24, etc.)")
-    relative_position: float = Field(ge=0.0, le=1.0, description="Position within the chunk (0.0=start, 1.0=end)")
+    # Timestamp-based fields (preferred)
+    timestamp_seconds: Optional[float] = Field(default=None, ge=0.0, description="Timestamp in seconds where this action occurs")
+    duration_seconds: Optional[float] = Field(default=None, ge=0.0, description="Duration of this action in seconds")
+    # Frame-based fields (legacy, for backward compatibility)
+    frame_index: int = Field(default=0, ge=0, description="Chunk start frame index (0, 12, 24, etc.)")
+    relative_position: float = Field(default=0.5, ge=0.0, le=1.0, description="Position within the chunk (0.0=start, 1.0=end)")
+    # Common fields
     entity: Optional[str] = Field(default=None, description="What is being acted upon (e.g., 'onions', 'pan')")
     state_before: Optional[str] = Field(default=None, description="State before action (e.g., 'raw', 'whole')")
     state_after: Optional[str] = Field(default=None, description="State after action (e.g., 'browning', 'diced')")
+    concurrent_with_other_action: Optional[bool] = Field(default=None, description="Whether this action happens at the same time as another")
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Confidence score")
     
     @computed_field
     @property
@@ -98,6 +108,16 @@ class MicroAction(BaseModel):
         For accurate frame calculation, use get_actual_frame(chunk_size) instead.
         """
         return self.frame_index + self.relative_position
+    
+    @computed_field
+    @property
+    def end_timestamp(self) -> Optional[float]:
+        """Calculate the end timestamp based on duration."""
+        if self.timestamp_seconds is not None:
+            if self.duration_seconds:
+                return self.timestamp_seconds + self.duration_seconds
+            return self.timestamp_seconds + 2.0  # Default 2 second action
+        return None
     
     def get_actual_frame(self, chunk_size: int = 12) -> float:
         """
@@ -186,6 +206,15 @@ class SceneLog(BaseModel):
         """
         return {ma.id: ma.get_actual_frame(chunk_size) for ma in self.get_all_micro_actions()}
     
+    def build_timestamp_lookup(self) -> dict[int, float]:
+        """
+        Build a lookup table mapping micro-action IDs to their timestamps.
+        
+        Returns:
+            Dict mapping micro_action_id -> timestamp_seconds
+        """
+        return {ma.id: ma.timestamp_seconds for ma in self.get_all_micro_actions() if ma.timestamp_seconds is not None}
+    
     def build_micro_action_description_lookup(self) -> dict[int, str]:
         """
         Build a lookup table mapping micro-action IDs to their action descriptions.
@@ -263,6 +292,74 @@ def compute_frame_indices_from_micro_actions(
             step.has_video_clip = False
             step.start_frame_index = None
             step.end_frame_index = None
+    
+    return recipe
+
+
+def compute_timestamps_from_micro_actions(
+    recipe: "Recipe",
+    scene_log: "SceneLog"
+) -> "Recipe":
+    """
+    Post-process a recipe to compute start/end timestamps from micro_action_ids.
+    
+    This function derives video clip timing from timestamp-based micro-actions,
+    which is more accurate than frame-based mapping.
+    
+    Args:
+        recipe: Recipe with steps containing micro_action_ids
+        scene_log: SceneLog containing all micro-actions with timestamps
+        
+    Returns:
+        Recipe with start_timestamp_seconds and end_timestamp_seconds populated
+    """
+    # Build lookup tables
+    id_to_timestamp = scene_log.build_timestamp_lookup()
+    id_to_description = scene_log.build_micro_action_description_lookup()
+    
+    # Get all micro-actions for end timestamp lookup
+    all_actions = {ma.id: ma for ma in scene_log.get_all_micro_actions()}
+    
+    # Process each step
+    for step in recipe.steps:
+        if not step.has_video_clip or not step.micro_action_ids:
+            step.start_timestamp_seconds = None
+            step.end_timestamp_seconds = None
+            continue
+        
+        timestamps = []
+        descriptions = []
+        invalid_ids = []
+        
+        for ma_id in step.micro_action_ids:
+            if ma_id in id_to_timestamp:
+                action_desc = id_to_description.get(ma_id, f"ID {ma_id}")
+                descriptions.append(action_desc)
+                
+                # Skip "no relevant cooking action" when calculating time range
+                if "no relevant cooking" not in action_desc.lower():
+                    start_ts = id_to_timestamp[ma_id]
+                    timestamps.append(start_ts)
+                    
+                    # Also consider the action's end timestamp
+                    if ma_id in all_actions and all_actions[ma_id].end_timestamp:
+                        timestamps.append(all_actions[ma_id].end_timestamp)
+            else:
+                invalid_ids.append(ma_id)
+        
+        step.micro_action_descriptions = descriptions
+        
+        if invalid_ids:
+            print(f"[TimestampMapping] Warning: Step {step.order} references invalid IDs: {invalid_ids}")
+        
+        if timestamps:
+            step.start_timestamp_seconds = min(timestamps)
+            step.end_timestamp_seconds = max(timestamps)
+        else:
+            print(f"[TimestampMapping] Warning: Step {step.order} has no valid timestamps, disabling video clip")
+            step.has_video_clip = False
+            step.start_timestamp_seconds = None
+            step.end_timestamp_seconds = None
     
     return recipe
 
