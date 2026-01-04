@@ -3,11 +3,12 @@ from __future__ import annotations
 import os
 import json
 import re
+import time
 import warnings
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from openai import OpenAI
+from openai import OpenAI, RateLimitError, APIError
 from dotenv import load_dotenv
 
 from ..downloaders.base import VideoInfo
@@ -75,7 +76,7 @@ class OpenRouterAdapter:
         frames: list[str],
         transcript: str | None = None,
         chunk_size: int = 12,
-        max_workers: int = 4
+        max_workers: int = 6
     ) -> list[SceneDescription]:
         """
         Analyze video frames and return structured scene descriptions.
@@ -140,7 +141,8 @@ class OpenRouterAdapter:
         frames: list[str],
         transcript: str | None = None,
         frame_index: int = 0,
-        frame_indices: Optional[list[int]] = None
+        frame_indices: Optional[list[int]] = None,
+        max_retries: int = 3
     ) -> SceneDescription:
         """
         Analyze a batch of frames and return a single scene description.
@@ -151,21 +153,63 @@ class OpenRouterAdapter:
             transcript: Optional audio transcript
             frame_index: Starting frame index (for single frame) or chunk start index
             frame_indices: All frame indices if this represents a chunk
+            max_retries: Maximum number of retry attempts on failure
             
         Returns:
             A single SceneDescription representing the batch
         """
         messages = self._build_scene_messages(video_info, frames, transcript, frame_index, frame_indices)
         
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            max_tokens=2048,
-            temperature=0.2,  # Lower temperature for more consistent scene descriptions
-        )
+        last_error = None
+        had_retry = False
         
-        content = response.choices[0].message.content
-        return self._parse_scene_response(content, frame_index, frame_indices)
+        for attempt in range(max_retries):
+            try:
+                response = self._client.chat.completions.create(
+                    model=self._model,
+                    messages=messages,
+                    max_tokens=2048,
+                    temperature=0.2,  # Lower temperature for more consistent scene descriptions
+                )
+                
+                content = response.choices[0].message.content
+                result = self._parse_scene_response(content, frame_index, frame_indices)
+                
+                # If we had to retry, log success
+                if had_retry:
+                    print(f"[VLM] ✓ Frame {frame_index} processed successfully after {attempt + 1} attempts")
+                
+                return result
+                
+            except RateLimitError as e:
+                # Rate limited - wait and retry with exponential backoff
+                had_retry = True
+                wait_time = (2 ** attempt) * 2  # 2s, 4s, 8s
+                print(f"[VLM] Rate limited on frame {frame_index}, waiting {wait_time}s before retry {attempt + 1}/{max_retries}")
+                time.sleep(wait_time)
+                last_error = e
+                
+            except APIError as e:
+                # API error (500, 502, etc.) - retry with backoff
+                had_retry = True
+                wait_time = (2 ** attempt) * 1  # 1s, 2s, 4s
+                print(f"[VLM] API error on frame {frame_index}: {e}, retry {attempt + 1}/{max_retries}")
+                time.sleep(wait_time)
+                last_error = e
+                
+            except Exception as e:
+                # JSON parsing or other error - retry once
+                if attempt < max_retries - 1:
+                    had_retry = True
+                    print(f"[VLM] Failed to parse frame {frame_index}, retrying: {e}")
+                    time.sleep(1)
+                    last_error = e
+                else:
+                    raise
+        
+        # All retries exhausted
+        print(f"[VLM] ✗ Frame {frame_index} FAILED after {max_retries} attempts")
+        raise last_error or Exception(f"Failed to process frame {frame_index} after {max_retries} attempts")
 
     def _build_prompt(self, video_info: VideoInfo, transcript: str | None = None) -> str:
         """Create the instruction prompt for the VLM."""
@@ -295,17 +339,8 @@ Rules:
         frame_indices: Optional[list[int]] = None
     ) -> str:
         """Create the instruction prompt for scene description analysis."""
-        transcript_section = ""
-        if transcript:
-            transcript_section = f"""
-Audio Transcript: {transcript}
-
-Use BOTH the visual frames AND the audio transcript to identify ingredients, actions, and state changes. The transcript often contains spoken instructions, ingredient amounts, and tips.
-"""
-        else:
-            transcript_section = """
-(No audio transcript available - analyze visual frames only)
-"""
+        # NOTE: transcript is accepted but NOT used - VLM should only analyze visual content
+        # The transcript is passed to the LLM later for recipe generation
         
         frame_info = ""
         if frame_indices and len(frame_indices) > 1:
@@ -315,12 +350,16 @@ Use BOTH the visual frames AND the audio transcript to identify ingredients, act
 
         return f"""You are analyzing cooking video frames to extract structured scene descriptions.
 
+CRITICAL RULES:
+- Only describe actions you can VISUALLY SEE happening in the provided frames
+- Do NOT infer or assume actions that might have happened but are not visible
+- If frames show a static scene (finished dish, ingredients laid out), return empty micro_actions list
+
 Video Title: {video_info.title}
 Video Description: {video_info.description or "Not provided"}
 {frame_info}
-{transcript_section}
 
-Focus on THREE key pillars:
+Focus on FOUR key pillars:
 
 1. ENTITY IDENTIFICATION: List all ingredients, tools (e.g., "cast iron skillet", "chef's knife"), and appliances (e.g., "air fryer", "oven") visible in this frame/chunk.
    CRITICAL RULES FOR ENTITY TYPES:
@@ -338,6 +377,19 @@ Focus on THREE key pillars:
 3. TEMPORAL ACTIONS: Describe what action is being performed (e.g., "chopping onions", "pouring 200ml milk", "adding 2 eggs to flour mixture"). If you can determine a step number, include it.
    CRITICAL: Every temporal_action MUST include "frame_index" set to {frame_index} (the current frame index).
 
+4. MICRO-ACTIONS (MOST IMPORTANT): Break down ALL individual atomic cooking actions with PRECISE timing.
+   - Each micro-action is a SINGLE, ATOMIC action like "add salt", "stir pan", "flip chicken", "pour oil"
+   - ONLY include actions you can VISUALLY SEE happening in the frames - do NOT infer from transcript
+   - relative_position MUST reflect WHICH FRAME in the chunk shows the action:
+     * If you receive {len(frame_indices) if frame_indices else 12} frames and an action is visible in the 1st frame → 0.0
+     * If an action is visible in the middle frames → 0.5
+     * If an action is visible in the last frame → 1.0
+     * IMPORTANT: If the first few frames show intro/static content and cooking starts at frame 3, the first action should have relative_position ~0.25 (3/12), NOT 0.0
+   - If ANY frames show intro content, title cards, or finished dish (no active cooking), add a single micro-action:
+     {{"action": "no relevant cooking action", "frame_index": {frame_index}, "relative_position": <position where intro ends>, "entity": null, "state_before": null, "state_after": null}}
+   - This enables precise video clip extraction, so BE GRANULAR and PRECISE with timing based on actual frame positions
+   - If ALL frames show static content with no cooking, output an empty micro_actions list
+
 Return your response as a JSON object with this exact structure:
 
 {{
@@ -351,6 +403,13 @@ Return your response as a JSON object with this exact structure:
     "temporal_actions": [
         {{"step_number": 1, "action_description": "chopping onions", "frame_index": {frame_index}, "entities_involved": ["onion", "chef's knife"]}}
     ],
+    "micro_actions": [
+        {{"action": "no relevant cooking action", "frame_index": {frame_index}, "relative_position": 0.0, "entity": null, "state_before": null, "state_after": null}},
+        {{"action": "add butter to pan", "frame_index": {frame_index}, "relative_position": 0.25, "entity": "butter", "state_before": "solid", "state_after": "melting"}},
+        {{"action": "swirl butter around", "frame_index": {frame_index}, "relative_position": 0.4, "entity": "butter", "state_before": "melting", "state_after": "melted"}},
+        {{"action": "add diced onions", "frame_index": {frame_index}, "relative_position": 0.6, "entity": "onions", "state_before": null, "state_after": "in pan"}},
+        {{"action": "stir onions", "frame_index": {frame_index}, "relative_position": 0.8, "entity": "onions", "state_before": "raw", "state_after": "cooking"}}
+    ],
     "metadata": {{"notes": "Additional observations or uncertainties"}}
 }}
 
@@ -363,12 +422,22 @@ Rules:
   - REQUIRED: Every state_change MUST have "frame_index" set to {frame_index}
 - temporal_actions: Describe actions being performed (can be empty list if no clear action)
   - REQUIRED: Every temporal_action MUST have "frame_index" set to {frame_index}
+- micro_actions: CRITICAL - Break down EVERY VISUALLY OBSERVED action into atomic steps
+  - ONLY include actions you can SEE happening in the frames - NOT actions inferred from transcript
+  - If ALL frames show a static scene with no action, return empty list: "micro_actions": []
+  - If SOME frames show intro/outro/static content, add: {{"action": "no relevant cooking action", "relative_position": <where it ends>}}
+  - action: Short, specific description (e.g., "add salt", "flip chicken", "pour oil")
+  - frame_index: MUST be {frame_index}
+  - relative_position: Float 0.0-1.0 based on WHICH FRAME shows the action (NOT just order of actions)
+    * If this chunk has 12 frames and an action appears in frame 4, relative_position = 4/12 ≈ 0.33
+  - entity: What is being acted on (optional but helpful)
+  - state_before/state_after: State changes (optional but helpful)
 - step_number: Only include if you can reasonably determine the sequence (can be null)
 - confidence: Optional, between 0.0 and 1.0
 - quantity: Optional, include if visible (e.g., "2 cups", "200ml", "3 eggs")
 - Return ONLY the JSON object, no other text
 - DO NOT include any entity with type other than "ingredient", "tool", or "appliance"
-- DO NOT omit frame_index from state_changes or temporal_actions"""
+- DO NOT omit frame_index from state_changes, temporal_actions, or micro_actions"""
     
     def _build_scene_messages(
         self,
@@ -424,6 +493,8 @@ Rules:
             data["state_changes"] = []
         if not isinstance(data.get("temporal_actions"), list):
             data["temporal_actions"] = []
+        if not isinstance(data.get("micro_actions"), list):
+            data["micro_actions"] = []
         
         # Filter entities - ONLY allow valid types, discard invalid ones
         valid_types = {"ingredient", "tool", "appliance"}
@@ -446,6 +517,22 @@ Rules:
         for temporal_action in data.get("temporal_actions", []):
             if temporal_action.get("frame_index") is None:
                 temporal_action["frame_index"] = frame_index
+        
+        # Ensure frame_index is set in all micro_actions and assign IDs
+        for idx, micro_action in enumerate(data.get("micro_actions", [])):
+            # Assign unique ID based on frame index and position
+            micro_action["id"] = frame_index * 100 + idx  # e.g., frame 5 action 2 = 502
+            if micro_action.get("frame_index") is None:
+                micro_action["frame_index"] = frame_index
+            # Ensure relative_position has a default
+            if micro_action.get("relative_position") is None:
+                micro_action["relative_position"] = 0.5  # Default to middle of chunk
+            
+            # Fix VLM outputting lists instead of strings for entity/state fields
+            # (happens when multiple entities are involved in an action)
+            for field in ["entity", "state_before", "state_after"]:
+                if isinstance(micro_action.get(field), list):
+                    micro_action[field] = ", ".join(str(v) for v in micro_action[field])
         
         # Add frame_index and frame_indices
         data["frame_index"] = frame_index
