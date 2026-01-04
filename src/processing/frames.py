@@ -8,7 +8,7 @@ class FrameExtractor:
     
     def extract(self, video_path: str) -> list[str]:
         frames = []
-        frame_limit = 35
+        frame_limit = 40
 
         vid = cv2.VideoCapture(video_path)
         if not vid.isOpened():

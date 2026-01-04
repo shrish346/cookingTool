@@ -13,9 +13,13 @@ class Step(BaseModel):
     instruction: str
     duration_minutes: Optional[int] = None
     tips: Optional[list[str]] = None
+    # Micro-action based video mapping (V2 approach)
+    micro_action_ids: Optional[list[int]] = Field(default=None, description="IDs of micro-actions that comprise this step")
+    micro_action_descriptions: Optional[list[str]] = Field(default=None, description="Descriptions of micro-actions (for debugging)")
     # Video loop fields for the Cooking Mode
-    start_frame_index: Optional[int] = Field(default=None, ge=0, description="Frame index where this step starts in the video")
-    end_frame_index: Optional[int] = Field(default=None, ge=0, description="Frame index where this step ends in the video")
+    start_frame_index: Optional[float] = Field(default=None, ge=0, description="Precise frame index where this step starts (from micro-actions)")
+    end_frame_index: Optional[float] = Field(default=None, ge=0, description="Precise frame index where this step ends (from micro-actions)")
+    has_video_clip: bool = Field(default=True, description="Whether this step has a matching video clip")
     video_clip_url: Optional[str] = Field(default=None, description="S3 URL for the extracted video clip")
     
     @computed_field
@@ -71,6 +75,43 @@ class Recipe(BaseModel):
 
 # Scene Description Models for VLM → LLM Pipeline
 
+class MicroAction(BaseModel):
+    """
+    A single atomic cooking action with precise timing.
+    
+    This enables accurate video clip extraction by tracking exactly when
+    each small action occurs within a scene/chunk.
+    """
+    id: int = Field(ge=0, description="Unique ID for this micro-action within the video")
+    action: str = Field(description="Brief action description (e.g., 'add salt', 'stir pan', 'flip chicken')")
+    frame_index: int = Field(ge=0, description="Chunk start frame index (0, 12, 24, etc.)")
+    relative_position: float = Field(ge=0.0, le=1.0, description="Position within the chunk (0.0=start, 1.0=end)")
+    entity: Optional[str] = Field(default=None, description="What is being acted upon (e.g., 'onions', 'pan')")
+    state_before: Optional[str] = Field(default=None, description="State before action (e.g., 'raw', 'whole')")
+    state_after: Optional[str] = Field(default=None, description="State after action (e.g., 'browning', 'diced')")
+    
+    @computed_field
+    @property
+    def precise_frame_index(self) -> float:
+        """
+        Legacy: Returns frame_index + relative_position for backward compatibility.
+        For accurate frame calculation, use get_actual_frame(chunk_size) instead.
+        """
+        return self.frame_index + self.relative_position
+    
+    def get_actual_frame(self, chunk_size: int = 12) -> float:
+        """
+        Compute the actual extracted frame number where this action occurs.
+        
+        Args:
+            chunk_size: Number of frames per chunk (default 12)
+            
+        Returns:
+            Actual frame number (e.g., chunk 0 + 0.20 relative = frame 2.4)
+        """
+        return self.frame_index + (self.relative_position * chunk_size)
+
+
 class Entity(BaseModel):
     """Represents an ingredient, tool, or appliance identified in a frame."""
     name: str
@@ -105,6 +146,7 @@ class SceneDescription(BaseModel):
     entities: list[Entity] = Field(default_factory=list, description="Ingredients, tools, and appliances visible")
     state_changes: list[StateChange] = Field(default_factory=list, description="State transformations observed")
     temporal_actions: list[TemporalAction] = Field(default_factory=list, description="Actions performed")
+    micro_actions: list["MicroAction"] = Field(default_factory=list, description="Granular atomic actions with precise timing")
     metadata: Optional[dict] = Field(default_factory=dict, description="Additional metadata (confidence, notes, etc.)")
 
 
@@ -121,4 +163,106 @@ class SceneLog(BaseModel):
     def from_dict(cls, data: dict) -> "SceneLog":
         """Create from dictionary (for loading from JSON)."""
         return cls(**data)
+    
+    def get_all_micro_actions(self) -> list[MicroAction]:
+        """
+        Collect all micro-actions from all scenes, sorted by precise frame index.
+        Useful for the LLM to see a complete timeline of actions.
+        """
+        all_actions = []
+        for scene in self.scenes:
+            all_actions.extend(scene.micro_actions)
+        return sorted(all_actions, key=lambda a: a.precise_frame_index)
+    
+    def build_micro_action_lookup(self, chunk_size: int = 12) -> dict[int, float]:
+        """
+        Build a lookup table mapping micro-action IDs to their actual frame numbers.
+        
+        Args:
+            chunk_size: Number of frames per chunk (default 12)
+            
+        Returns:
+            Dict mapping micro_action_id -> actual_frame_number
+        """
+        return {ma.id: ma.get_actual_frame(chunk_size) for ma in self.get_all_micro_actions()}
+    
+    def build_micro_action_description_lookup(self) -> dict[int, str]:
+        """
+        Build a lookup table mapping micro-action IDs to their action descriptions.
+        
+        Returns:
+            Dict mapping micro_action_id -> action description
+        """
+        return {ma.id: ma.action for ma in self.get_all_micro_actions()}
+
+
+def compute_frame_indices_from_micro_actions(
+    recipe: "Recipe",
+    scene_log: "SceneLog",
+    chunk_size: int = 12
+) -> "Recipe":
+    """
+    Post-process a recipe to compute start/end frame indices from micro_action_ids.
+    
+    This function deterministically derives frame timing from the VLM's micro-action
+    data, ensuring consistency between micro_action_ids and frame indices.
+    
+    Also adds micro_action_descriptions to each step for debugging purposes.
+    
+    Args:
+        recipe: Recipe with steps containing micro_action_ids
+        scene_log: SceneLog containing all micro-actions with frame indices
+        chunk_size: Number of frames per VLM chunk (default 12)
+        
+    Returns:
+        Recipe with start_frame_index and end_frame_index populated for each step
+    """
+    # Build lookup tables using actual frame numbers
+    id_to_frame = scene_log.build_micro_action_lookup(chunk_size)
+    id_to_description = scene_log.build_micro_action_description_lookup()
+    
+    # Process each step
+    for step in recipe.steps:
+        # Skip steps marked as no video clip or with no micro-action IDs
+        if not step.has_video_clip or not step.micro_action_ids:
+            step.start_frame_index = None
+            step.end_frame_index = None
+            continue
+        
+        # Look up frame indices and descriptions for all referenced micro-action IDs
+        frame_indices = []
+        descriptions = []
+        invalid_ids = []
+        
+        for ma_id in step.micro_action_ids:
+            if ma_id in id_to_frame:
+                action_desc = id_to_description.get(ma_id, f"ID {ma_id}")
+                descriptions.append(action_desc)
+                
+                # Skip "no relevant cooking action" when calculating frame range
+                # (but still include in descriptions for transparency)
+                if "no relevant cooking" not in action_desc.lower():
+                    frame_indices.append(id_to_frame[ma_id])
+            else:
+                invalid_ids.append(ma_id)
+        
+        # Store descriptions for debugging
+        step.micro_action_descriptions = descriptions
+        
+        # Warn about invalid IDs (optional - could be logged)
+        if invalid_ids:
+            print(f"[FrameMapping] Warning: Step {step.order} references invalid micro-action IDs: {invalid_ids}")
+        
+        # Compute frame range from valid IDs
+        if frame_indices:
+            step.start_frame_index = min(frame_indices)
+            step.end_frame_index = max(frame_indices)
+        else:
+            # All IDs were invalid - mark as no video clip
+            print(f"[FrameMapping] Warning: Step {step.order} has no valid micro-action IDs, disabling video clip")
+            step.has_video_clip = False
+            step.start_frame_index = None
+            step.end_frame_index = None
+    
+    return recipe
 
