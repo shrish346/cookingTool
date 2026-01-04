@@ -361,10 +361,10 @@ async def run_pipeline(url: str, video_id: str, source: VideoSource):
             video_fps = await asyncio.to_thread(clip_extractor.get_video_fps, video_path)
             total_frames = await asyncio.to_thread(clip_extractor.get_total_frames, video_path)
             
-            # The VLM analyzed 35 evenly-spaced frames, so scene indices need to be
-            # converted back to actual frame numbers
-            num_samples = 35  # Same as FrameExtractor.frame_limit
-            frame_interval = max(1, total_frames // num_samples)
+            # The VLM analyzed len(frames) evenly-spaced frames, so scene indices need to be
+            # converted back to actual frame numbers using the same interval
+            num_samples = len(frames)  # Actual number of frames the VLM analyzed
+            frame_interval = max(1, total_frames // num_samples) if num_samples > 0 else 1
             
             print(f"[ClipExtractor] Video: {total_frames} frames, fps={video_fps}, interval={frame_interval}")
             
