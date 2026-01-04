@@ -8,7 +8,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 from ..downloaders.base import VideoInfo
-from ..schemas import Recipe, SceneLog
+from ..schemas import Recipe, SceneLog, compute_frame_indices_from_micro_actions
 
 load_dotenv()
 
@@ -55,7 +55,12 @@ class OpenRouterLLMAdapter:
         )
         
         content = response.choices[0].message.content
-        return self._parse_response(content, video_info)
+        recipe = self._parse_response(content, video_info)
+        
+        # Post-process: compute frame indices from micro_action_ids
+        recipe = compute_frame_indices_from_micro_actions(recipe, scene_log)
+        
+        return recipe
 
     def _build_prompt(
         self,
@@ -79,6 +84,9 @@ Use the transcript to cross-reference ingredient amounts, clarify steps, and add
 (No audio transcript available)
 """
 
+        # Format micro-actions timeline
+        micro_actions_text = self._format_micro_actions(scene_log)
+
         return f"""You are a professional chef analyzing scene descriptions from a cooking video to create a complete, well-formatted recipe.
 
 Video Title: {video_info.title}
@@ -88,9 +96,12 @@ Video Description: {video_info.description or "Not provided"}
 Scene Descriptions from Video Analysis:
 {scene_text}
 
+MICRO-ACTIONS TIMELINE (Reference for grouping actions into steps):
+{micro_actions_text}
+
 Your task:
 1. Cross-reference all ingredients across scenes to build a complete ingredient list
-2. Resolve temporal ordering from the scene descriptions to create step-by-step instructions
+2. GROUP related micro-actions into logical recipe steps (e.g., "add butter", "add garlic", "stir" → "Sauté the Aromatics")
 3. Infer quantities, units, and preparation methods from the scene descriptions
 4. Format everything into a professional recipe
 
@@ -115,8 +126,8 @@ Return your response as a JSON object with this exact structure:
             "instruction": "Detailed step description",
             "duration_minutes": 5,
             "tips": ["optional tip"],
-            "start_frame_index": 0,
-            "end_frame_index": 5
+            "micro_action_ids": [500, 501, 502],
+            "has_video_clip": true
         }}
     ],
     "calories": 450,
@@ -136,13 +147,13 @@ Rules:
 - Combine similar steps if they appear in multiple scenes
 - For optional fields (prep_time_minutes, cook_time_minutes, calories, etc.), you can omit if unknown
 
-VIDEO CLIP MAPPING (CRITICAL):
+MICRO-ACTION GROUPING (CRITICAL):
 - Each step MUST have "title" (short 2-4 word title like "Boil the Pasta")
-- Each step MUST have "start_frame_index" and "end_frame_index" from the scene descriptions
-- Look at which Scene/Frame numbers correspond to each cooking action
-- start_frame_index = the frame where this step BEGINS
-- end_frame_index = the frame where this step ENDS (before the next step starts)
-- These frame indices will be used to extract video clips for each step
+- Each step MUST group related micro-actions using "micro_action_ids" (list of IDs from the timeline above)
+- Group actions that belong together semantically (e.g., adding and stirring ingredients for one component)
+- Keep steps focused - don't group unrelated actions just because they're sequential
+- "has_video_clip": Set to false if this step has NO matching micro-actions (e.g., "let rest for 10 min", "preheat oven")
+  - For steps with no video, use an empty list: "micro_action_ids": []
 
 - Return ONLY the JSON object, no other text"""
 
@@ -172,6 +183,30 @@ VIDEO CLIP MAPPING (CRITICAL):
                     lines.append(f"  - {step}{action.action_description}")
                     if action.entities_involved:
                         lines.append(f"    (involves: {', '.join(action.entities_involved)})")
+        
+        return "\n".join(lines)
+    
+    def _format_micro_actions(self, scene_log: SceneLog) -> str:
+        """Format micro-actions into a timeline for precise clip mapping."""
+        all_actions = scene_log.get_all_micro_actions()
+        
+        if not all_actions:
+            return "(No micro-actions extracted - using scene-based mapping)"
+        
+        lines = ["ID    | Frame | Action                        | Entity      | State Change"]
+        lines.append("-" * 80)
+        
+        for action in all_actions:
+            state_change = ""
+            if action.state_before and action.state_after:
+                state_change = f"{action.state_before} → {action.state_after}"
+            elif action.state_after:
+                state_change = f"→ {action.state_after}"
+            
+            entity = action.entity or ""
+            lines.append(
+                f"{action.id:5} | {action.precise_frame_index:5.2f} | {action.action[:30]:<30} | {entity[:12]:<12} | {state_change}"
+            )
         
         return "\n".join(lines)
 
