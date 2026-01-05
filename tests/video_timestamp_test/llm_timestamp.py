@@ -97,29 +97,38 @@ Use the transcript to clarify ingredient amounts and add any details not visible
 (No audio transcript available)
 """
 
-        return f"""You are a professional chef analyzing a cooking video to create a complete recipe.
+        return f"""You are a professional chef and video editor analyzing a cooking video to create a structured recipe.
 
+INPUT DATA:
 Video Title: {video_info.title}
 Video Description: {video_info.description or "Not provided"}
 Video Duration: {video_info.duration_seconds} seconds
+
+TRANSCRIPT:
 {transcript_section}
 
 SCENE ANALYSIS:
 {scene_text}
 
-MICRO-ACTIONS TIMELINE (with timestamps):
+MICRO-ACTIONS TIMELINE (IDs and timestamps):
 {micro_actions_text}
 
-Your task:
-1. Build a complete ingredient list from the entities and actions
-2. GROUP related micro-actions into logical recipe steps
-3. Each step should reference the micro-action IDs that comprise it
-4. The timestamps will be used to extract video clips for each step
+YOUR TASK:
+1. Build a complete ingredient list.
+2. Group micro-actions into logical, CHRONOLOGICAL recipe steps.
+3. Ensure steps align with the video flow for accurate clip extraction.
 
-Return your response as a JSON object:
+[NEW] GROUPING RULES (CRITICAL):
+1. **Temporal Contiguity is King:** Only group micro-actions that happen closely together in time. 
+2. **The "Set Aside" Rule:** If an ingredient is handled (e.g., "sear chicken"), then set aside while other things happen, and then handled again later (e.g., "slice chicken"), THESE MUST BE TWO SEPARATE STEPS. Do not merge them.
+3. **Linear Flow:** Step 1 must happen before Step 2. The micro-action IDs in Step 1 must be lower than the IDs in Step 2.
+4. **Clip Tightness:** A step's duration is defined by the start of its first micro-action and the end of its last. Ensure this duration captures *only* the specific instruction, not the empty time between phases.
+
+OUTPUT FORMAT:
+Return a valid JSON object with this exact structure:
 
 {{
-    "reasoning": "Explain how you built the recipe",
+    "reasoning": "Briefly explain how you handled the timeline and split complex steps.",
     "title": "Recipe name",
     "description": "Brief description",
     "servings": 4,
@@ -133,27 +142,24 @@ Return your response as a JSON object:
     "steps": [
         {{
             "order": 1,
-            "title": "Short Step Title",
-            "instruction": "Detailed step description",
+            "title": "Action Verb + Noun (e.g., 'Sear the Chicken')",
+            "instruction": "Detailed instruction for the user.",
             "duration_minutes": 5,
             "tips": ["optional tip"],
             "micro_action_ids": [0, 1, 2],
             "has_video_clip": true
         }}
     ],
-    "calories": 450,
-    "protein": 25,
-    "carbs": 50,
-    "fats": 15
+    "nutrition_estimates": {{ "calories": 450, "protein": 25, "carbs": 50, "fats": 15 }}
 }}
 
-RULES:
-- Every ingredient MUST have "quantity" (positive number) and "unit" (string)
-- Each step MUST have "title" (2-4 words) and "micro_action_ids" (list of IDs from timeline)
-- Group semantically related actions (e.g., "add butter", "melt butter", "add garlic" → "Sauté Aromatics")
-- Set "has_video_clip": false for steps with no matching actions (e.g., "let rest")
-- Don't include micro-actions marked as "no relevant cooking action" in step groupings
-- Return ONLY the JSON object
+CONSTRAINTS:
+- **Ingredients:** "quantity" must be a number (use 0 if negligible/to taste). "unit" is required (use "count" or "to taste" if unclear).
+- **Steps:** "micro_action_ids" must be a list of integers from the timeline.
+- **Video Clips:** If a step is purely instructional (e.g., "Preheat oven to 350") and has no visual action in the timeline, set "has_video_clip": false and "micro_action_ids": [].
+- **Noise:** Ignore micro-actions labeled "no relevant cooking action".
+
+Return ONLY the JSON object.
 """
 
     def _format_scene_log(self, scene_log: VideoSceneLog) -> str:

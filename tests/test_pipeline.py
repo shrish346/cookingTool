@@ -376,8 +376,8 @@ def main(test_url: str = DEFAULT_TEST_URL):
         if recipe.prep_time_minutes or recipe.cook_time_minutes:
             print(f"  Time: {recipe.prep_time_minutes or 0} min prep, {recipe.cook_time_minutes or 0} min cook")
         
-        if recipe.cusine:
-            print(f"  Cuisine: {recipe.cusine}")
+        if recipe.cuisine:
+            print(f"  Cuisine: {recipe.cuisine}")
         
         if recipe.tags:
             print(f"  Tags: {', '.join(recipe.tags)}")
