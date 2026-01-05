@@ -6,9 +6,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .config import get_settings
-from .routes import router
-from .deps import get_redis
+from backend.api.config import get_settings
+from backend.api.routes import router
+from backend.api.deps import get_redis
 
 
 @asynccontextmanager

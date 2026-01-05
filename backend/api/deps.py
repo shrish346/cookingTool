@@ -10,7 +10,7 @@ import redis.asyncio as redis
 import boto3
 from botocore.exceptions import ClientError
 
-from .config import get_settings
+from backend.api.config import get_settings
 
 
 # Global client instances

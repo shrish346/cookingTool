@@ -9,8 +9,8 @@ from enum import Enum
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request
 from pydantic import BaseModel, Field, HttpUrl
 
-from .deps import get_cache_manager, CacheManager
-from .config import get_settings
+from backend.api.deps import get_cache_manager, CacheManager
+from backend.api.config import get_settings
 
 
 router = APIRouter()
@@ -200,7 +200,7 @@ async def process_video(
         cached_recipe = await cache.get_cached_recipe(video_id)
         if cached_recipe:
             # Store the cached result for immediate retrieval
-            from .deps import get_redis
+            from backend.api.deps import get_redis
             redis_client = await get_redis()
             await redis_client.set(
                 f"job:{video_id}:status",
@@ -245,7 +245,7 @@ async def get_status(
     Get the status of a processing job.
     Poll this endpoint to track progress.
     """
-    from .deps import get_redis
+    from backend.api.deps import get_redis
     redis_client = await get_redis()
     
     # Get job status from Redis
@@ -287,7 +287,7 @@ async def run_pipeline(url: str, video_id: str, source: VideoSource):
     Background task that runs the full VLM → LLM → FFmpeg pipeline.
     Updates Redis with progress for status polling.
     """
-    from .deps import get_redis, get_cache_manager
+    from backend.api.deps import get_redis, get_cache_manager
     from src.downloaders.factory import get_downloader
     from src.processing.frames import FrameExtractor
     from src.processing.audio import AudioTranscriber
