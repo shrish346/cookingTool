@@ -40,7 +40,7 @@ OUTPUT_DIR = Path(__file__).parent / "output"
 CLIPS_DIR = OUTPUT_DIR / "clips"
 
 # Default test video (short cooking video)
-DEFAULT_TEST_URL = "https://www.youtube.com/shorts/Ll307dapW64"
+DEFAULT_TEST_URL = "https://www.youtube.com/shorts/0K4MCbKPIyA"
 
 
 def extract_clip_by_timestamp(
