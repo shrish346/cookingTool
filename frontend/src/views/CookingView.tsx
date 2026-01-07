@@ -20,10 +20,9 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
   const hasVideo = Boolean(step?.video_clip_url)
 
   // Handle tap navigation
-  const handleTap = (e: React.MouseEvent | React.TouchEvent) => {
+  const handleTap = (e: React.MouseEvent) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    const clientX = 'touches' in e ? e.touches[0]?.clientX ?? 0 : e.clientX
-    const tapX = clientX - rect.left
+    const tapX = e.clientX - rect.left
     const halfWidth = rect.width / 2
 
     if (tapX < halfWidth) {
@@ -49,7 +48,6 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
       <div
         className="cooking-mode flex"
         onClick={handleTap}
-        onTouchStart={handleTap}
       >
         {/* Left panel - Step info */}
         <div className="flex-1 flex flex-col justify-between p-6 lg:p-8">
