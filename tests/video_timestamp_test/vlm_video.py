@@ -39,8 +39,8 @@ load_dotenv()
 def compress_video_for_api(
     video_path: str,
     max_size_mb: float = 15.0,  # Allow slightly larger for better quality
-    target_width: int = 720,  # Higher resolution for better action detection
-    target_fps: int = 15  # Higher FPS for smoother temporal analysis
+    target_width: int = 360,  # Higher resolution for better action detection
+    target_fps: int = 2  # Higher FPS for smoother temporal analysis
 ) -> tuple[str, float]:
     """
     Compress video to stay under API size limits.
@@ -62,9 +62,7 @@ def compress_video_for_api(
         # Use two-pass encoding for better quality at target size
         # First, try with reasonable quality settings
         cmd = [
-            "ffmpeg",
-            "-y",
-            "-i", video_path,
+            "ffmpeg","-y","-i", video_path,
             "-vf", f"scale={target_width}:-2,fps={target_fps}",
             "-c:v", "libx264",
             "-preset", "medium",
@@ -74,12 +72,7 @@ def compress_video_for_api(
             temp_path
         ]
         
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=120
-        )
+        result = subprocess.run(cmd,capture_output=True,text=True,timeout=120)
         
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg compression failed: {result.stderr}")
@@ -118,9 +111,9 @@ def compress_video_for_api(
 
 class VideoVLMAdapter:
     """
-    Adapter for OpenRouter's Qwen2.5-VL with video support.
+    Adapter for any OpenRouter models
     
-    Uses direct video upload.
+    Uploads video as base64 to the model.
     """
 
     def __init__(self, model: str = "google/gemini-2.0-flash-001"):
@@ -155,7 +148,8 @@ class VideoVLMAdapter:
         self,
         video_info: VideoInfo,
         video_path: str,
-        max_retries: int = 3
+        max_retries: int = 3,
+        debug: bool = False
     ) -> VideoSceneLog:
         """
         Analyze video by uploading it directly as base64.
@@ -215,6 +209,19 @@ class VideoVLMAdapter:
                     content = response.choices[0].message.content
                     scene = self._parse_video_response(content, video_info.duration_seconds)
                     
+                    # Print full list of microactions as requested
+                    if(debug):
+                        print("\n" + "="*80)
+                        print("EXTRACTED MICRO-ACTIONS TIMELINE:")
+                        print("="*80)
+                        print(f"Total actions: {len(scene.micro_actions)}")
+                        print("-" * 80)
+                        for ma in scene.micro_actions:
+                            ts = f"{ma.timestamp_seconds:.1f}s"
+                            dur = f" (+{ma.duration_seconds:.1f}s)" if ma.duration_seconds else ""
+                            print(f"  [{ts}{dur}] {ma.action}")
+                        print("="*80 + "\n")
+
                     return VideoSceneLog(
                         scene=scene,
                         video_info={
@@ -266,45 +273,42 @@ class VideoVLMAdapter:
 
         return f"""You are a forensic video analyst specializing in culinary processes. Your goal is to create a factual log of cooking actions based ONLY on visual evidence.
 
-VIDEO METADATA:
-Title: {video_info.title}
-Duration: {video_info.duration_seconds} seconds
+*** CONTEXT AWARENESS: THE "HERO SHOT" ***
+Cooking videos often are non-linear. They usually begin with a "Preview" or "Hero Shot" (showing the finished dish, eating it, or plating it) before cutting back in time to show the raw ingredients.
+- **The Reset Point:** Identify the moment the video cuts from a finished/cooked state to a raw/empty state.
+- **Tagging:** Any action occurring *before* this reset point involving the finished dish must be tagged.
 
 *** STEP 1: VISUAL SCRATCHPAD (Mandatory) ***
 Watch the video chronologically. Create a raw text log of distinct physical movements.
 - Format: [Start MM:SS - End MM:SS] : [Entity] -> [Action]
-- Multitasking: If multiple actions occur simultaneously (e.g., stirring while pouring), list them as SEPARATE lines with the same timestamp range.
+- Multitasking: If multiple actions occur simultaneously (e.g., stirring while pouring), list them as SEPARATE lines.
 - Constraint: If nothing significant happens for 5 seconds, do NOT write anything.
 
 *** STEP 2: JSON GENERATION ***
 Convert your scratchpad into valid JSON.
 
 CRITICAL FORMATTING RULES:
-1. Do not nest actions inside other actions. Every action is a separate object in the main list.
-2. Check your brackets. Ensure every '{{' has a closing '}}' before starting a new item.
+1. Do not nest actions. Every action is a separate object.
+2. Check your brackets. Ensure every '{{' has a closing '}}'.
 3. No Duplicates: Do not repeat the same action for the same timestamp.
 
 JSON EXAMPLE (Follow this structure exactly):
 {{
-  "summary": "Step-by-step preparation of cucumber salad including slicing and seasoning.",
-  "entities": [
-    {{"name": "Cucumber", "type": "ingredient"}},
-    {{"name": "Knife", "type": "tool"}},
-    {{"name": "Bowl", "type": "tool"}}
-  ],
+  "summary": "...",
+  "entities": [ ... ],
   "micro_actions": [
+    {{
+      "action": "Taking a bite of the lasagna [PREVIEW]",
+      "start": "00:00",
+      "end": "00:05",
+      "entity": "Fork",
+      "concurrent_with_other_action": false
+    }},
     {{
       "action": "Slicing Cucumber into Rounds",
       "start": "00:28",
       "end": "00:30",
       "entity": "Knife",
-      "concurrent_with_other_action": false
-    }},
-    {{
-      "action": "Adding sliced cucumber to Bowl",
-      "start": "00:31",
-      "end": "00:33",
-      "entity": "Cucumber",
       "concurrent_with_other_action": false
     }}
   ]
@@ -312,16 +316,15 @@ JSON EXAMPLE (Follow this structure exactly):
 
 STRICT ACCURACY RULES:
 1. Visual Evidence Only: If you do not see a hand touching an object or a tool moving, do not list it.
-2. No Filler: Quality over quantity. Do not hallucinate generic actions just to reach a higher count.
-3. Valid Actions: Include both STATE CHANGES (e.g., chopping, melting) and ACTIVE PROCESSES (e.g., stirring, whisking, basting). Ignore passive states (e.g., "soup is boiling" with no human interaction).
-   - Output format for valid actions: [Action Verb] + [Object] + [Resulting State/Location]
-   - Transformation: If the object changes shape/form, describe the new form (e.g., "slicing carrots into rounds").
-   - Destination: If the object moves, describe the container (e.g., "transferring onions to the hot skillet").
-   - Completion: If the action is a process, describe the goal state (e.g., "whisking eggs until frothy").
-   - Accuracy: If the resulting state/location is not clear, do not list it.
-4. Concurrency: You MUST list simultaneous actions separately. Do not group them into one generic event.
-5. Entity Consistency: Use the exact same name for an entity in the 'micro_actions' list as you defined in the 'entities' list.
-6. Time Format: Output timestamps as "MM:SS" strings in the JSON to avoid math errors.
+2. **Preview Detection:** If an action involves the *finished* product (e.g., tasting, cutting a fully cooked slice) but appears at the start of the video *before* raw ingredients are introduced, you MUST append `[PREVIEW]` to the end of the action string.
+3. Valid Actions: Include both STATE CHANGES and ACTIVE PROCESSES.
+   - Output format: [Action Verb] + [Object] + [Resulting State/Location] + [Optional PREVIEW tag]
+   - Transformation: If object changes form, describe it (e.g., "slicing carrots into rounds").
+   - Destination: If object moves, describe container.
+   - Completion: If action is a process, describe goal state (e.g., "whisking until frothy").
+4. Concurrency: List simultaneous actions separately.
+5. Entity Consistency: Use exact names from the 'entities' list.
+6. Time Format: "MM:SS".
 
 Return ONLY the Scratchpad followed by the JSON object."""
 

@@ -110,7 +110,8 @@ TRANSCRIPT:
 SCENE ANALYSIS:
 {scene_text}
 
-MICRO-ACTIONS TIMELINE (IDs and timestamps):
+MICRO-ACTIONS TIMELINE:
+(Format: ID | Timestamp | Action Description. Note: Some actions may end with a [PREVIEW] tag.)
 {micro_actions_text}
 
 YOUR TASK:
@@ -119,16 +120,17 @@ YOUR TASK:
 3. Ensure steps align with the video flow for accurate clip extraction.
 
 [NEW] GROUPING RULES (CRITICAL):
-1. **Temporal Contiguity is King:** Only group micro-actions that happen closely together in time. 
-2. **The "Set Aside" Rule:** If an ingredient is handled (e.g., "sear chicken"), then set aside while other things happen, and then handled again later (e.g., "slice chicken"), THESE MUST BE TWO SEPARATE STEPS. Do not merge them.
-3. **Linear Flow:** Step 1 must happen before Step 2. The micro-action IDs in Step 1 must be lower than the IDs in Step 2.
-4. **Clip Tightness:** A step's duration is defined by the start of its first micro-action and the end of its last. Ensure this duration captures *only* the specific instruction, not the empty time between phases.
+1. **The Preview Filter (CRITICAL):** Scan the micro-actions for the `[PREVIEW]` tag. These represent the finished dish shown at the start of the video. **Do NOT include these IDs in any recipe step.** The recipe must start at the first micro-action *without* a preview tag.
+2. **Temporal Contiguity is King:** Only group micro-actions that happen closely together in time.
+3. **The "Set Aside" Rule:** If an ingredient is handled (e.g., "sear chicken"), then set aside while other things happen, and then handled again later, THESE MUST BE TWO SEPARATE STEPS. Do not merge them.
+4. **Linear Flow:** Step 1 must happen before Step 2.
+5. **Clip Tightness:** A step's duration is defined by the start of its first micro-action and the end of its last.
 
 OUTPUT FORMAT:
 Return a valid JSON object with this exact structure:
 
 {{
-    "reasoning": "Briefly explain how you handled the timeline and split complex steps.",
+    "reasoning": "Briefly explain how you handled the timeline, specifically where you determined the preview ended and cooking began.",
     "title": "Recipe name",
     "description": "Brief description",
     "servings": 4,
@@ -146,7 +148,7 @@ Return a valid JSON object with this exact structure:
             "instruction": "Detailed instruction for the user.",
             "duration_minutes": 5,
             "tips": ["optional tip"],
-            "micro_action_ids": [0, 1, 2],
+            "micro_action_ids": [3, 4, 5], 
             "has_video_clip": true
         }}
     ],
@@ -155,7 +157,7 @@ Return a valid JSON object with this exact structure:
 
 CONSTRAINTS:
 - **Ingredients:** "quantity" must be a number (use 0 if negligible/to taste). "unit" is required (use "count" or "to taste" if unclear).
-- **Steps:** "micro_action_ids" must be a list of integers from the timeline.
+- **Steps:** "micro_action_ids" must be a list of integers from the timeline. **Ensure NO IDs marked with [PREVIEW] are included.**
 - **Video Clips:** If a step is purely instructional (e.g., "Preheat oven to 350") and has no visual action in the timeline, set "has_video_clip": false and "micro_action_ids": [].
 - **Noise:** Ignore micro-actions labeled "no relevant cooking action".
 

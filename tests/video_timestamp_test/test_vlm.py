@@ -92,18 +92,23 @@ def main(test_url: str = DEFAULT_TEST_URL):
         # CORRECT SCHEMA for OpenRouter Video
         prompt = f"""You are a forensic video analyst specializing in culinary processes. Your goal is to create a factual log of cooking actions based ONLY on visual evidence.
 
+*** CONTEXT AWARENESS: THE "HERO SHOT" ***
+Cooking videos often are non-linear. They usually begin with a "Preview" or "Hero Shot" (showing the finished dish, eating it, or plating it) before cutting back in time to show the raw ingredients.
+- **The Reset Point:** Identify the moment the video cuts from a finished/cooked state to a raw/empty state.
+- **Tagging:** Any action occurring *before* this reset point involving the finished dish must be tagged.
+
 *** STEP 1: VISUAL SCRATCHPAD (Mandatory) ***
 Watch the video chronologically. Create a raw text log of distinct physical movements.
 - Format: [Start MM:SS - End MM:SS] : [Entity] -> [Action]
-- Multitasking: If multiple actions occur simultaneously (e.g., stirring while pouring), list them as SEPARATE lines with the same timestamp range.
+- Multitasking: If multiple actions occur simultaneously (e.g., stirring while pouring), list them as SEPARATE lines.
 - Constraint: If nothing significant happens for 5 seconds, do NOT write anything.
 
 *** STEP 2: JSON GENERATION ***
 Convert your scratchpad into valid JSON.
 
 CRITICAL FORMATTING RULES:
-1. Do not nest actions inside other actions. Every action is a separate object in the main list.
-2. Check your brackets. Ensure every '{{' has a closing '}}' before starting a new item.
+1. Do not nest actions. Every action is a separate object.
+2. Check your brackets. Ensure every '{{' has a closing '}}'.
 3. No Duplicates: Do not repeat the same action for the same timestamp.
 
 JSON EXAMPLE (Follow this structure exactly):
@@ -112,30 +117,33 @@ JSON EXAMPLE (Follow this structure exactly):
   "entities": [ ... ],
   "micro_actions": [
     {{
+      "action": "Taking a bite of the lasagna [PREVIEW]",
+      "start": "00:00",
+      "end": "00:05",
+      "entity": "Fork",
+      "concurrent_with_other_action": false
+    }},
+    {{
       "action": "Slicing Cucumber into Rounds",
       "start": "00:28",
       "end": "00:30",
       "entity": "Knife",
       "concurrent_with_other_action": false
-    }},
-    {{
-       ... next action ...
     }}
   ]
 }}
 
 STRICT ACCURACY RULES:
 1. Visual Evidence Only: If you do not see a hand touching an object or a tool moving, do not list it.
-2. No Filler: Quality over quantity. Do not hallucinate generic actions just to reach a higher count.
-3. Valid Actions: Include both STATE CHANGES (e.g., chopping, melting) and ACTIVE PROCESSES (e.g., stirring, whisking, basting). Ignore passive states (e.g., "soup is boiling" with no human interaction).
-   - Output format for valid actions: [Action Verb] + [Object] + [Resulting State/Location]
-   - Transformation: If the object changes shape/form, describe the new form (e.g., "slicing carrots into rounds").
-   - Destination: If the object moves, describe the container (e.g., "transferring onions to the hot skillet").
-   - Completion: If the action is a process, describe the goal state (e.g., "whisking eggs until frothy").
-   - Accuracy: If the resulting state/location is not clear, do not list it.
-4. Concurrency: You MUST list simultaneous actions separately. Do not group them into one generic event.
-5. Entity Consistency: Use the exact same name for an entity in the 'micro_actions' list as you defined in the 'entities' list.
-6. Time Format: Output timestamps as "MM:SS" strings in the JSON to avoid math errors.
+2. **Preview Detection:** If an action involves the *finished* product (e.g., tasting, cutting a fully cooked slice) but appears at the start of the video *before* raw ingredients are introduced, you MUST append `[PREVIEW]` to the end of the action string.
+3. Valid Actions: Include both STATE CHANGES and ACTIVE PROCESSES.
+   - Output format: [Action Verb] + [Object] + [Resulting State/Location] + [Optional PREVIEW tag]
+   - Transformation: If object changes form, describe it (e.g., "slicing carrots into rounds").
+   - Destination: If object moves, describe container.
+   - Completion: If action is a process, describe goal state (e.g., "whisking until frothy").
+4. Concurrency: List simultaneous actions separately.
+5. Entity Consistency: Use exact names from the 'entities' list.
+6. Time Format: "MM:SS".
 
 Return ONLY the Scratchpad followed by the JSON object."""
         messages = [
@@ -160,6 +168,8 @@ Return ONLY the Scratchpad followed by the JSON object."""
         response = client.chat.completions.create(
             model=MODEL_ID,
             messages=messages,
+            max_tokens=8192,
+            temperature=0.4,
         )
         print(f"  Time: {time.perf_counter() - start:.2f}s")
         print("-" * 60)
