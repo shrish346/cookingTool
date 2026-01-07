@@ -1,26 +1,55 @@
-# cookingTool
+# Chef's Loop
 
-## Requirements
+image here
 
-### System Dependencies
+Chef's Loop is a tool that processes cooking youtube shorts, tik toks, and instagram reels into interactive, step-by-step recipes. It uses computer vision and AI to extract timestamps, generate instructions, and create looping video clips for each culinary step.
 
-- **ffmpeg** - Required for audio extraction from video files
-  - **macOS**: `brew install ffmpeg`
-  - **Linux (Debian/Ubuntu)**: `sudo apt-get install ffmpeg`
-  - **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html)
+## Docker Setup
 
-### Python Dependencies
-
-Install Python packages from `requirements.txt`:
+1. Copy `env.example` to `.env` and fill in your API keys.
+2. Start the services:
 
 ```bash
-pip install -r requirements.txt
+docker-compose up --build
 ```
 
-**Python packages included:**
+The frontend is available at `http://localhost:5173` and the backend at `http://localhost:8000`.
 
-- `yt-dlp` - YouTube video downloading
-- `openai` - OpenRouter API client
-- `opencv-python` - Video frame extraction
-- `pydantic` - Data validation and schemas
-- `python-dotenv` - Environment variable management
+## Local Setup
+
+### Prerequisites
+
+- Python 3.10+
+- Node.js 18+
+- FFmpeg
+- Redis
+
+### Backend
+
+1. Copy `env.example` to `.env` and fill in your API keys.
+2. Install dependencies:
+
+```bash
+pip install -r backend/requirements.txt
+```
+
+3. Start the server from the project root:
+
+```bash
+uvicorn backend.api.main:app --reload
+```
+
+### Frontend
+
+1. Navigate to the frontend directory:
+
+```bash
+cd frontend
+```
+
+2. Install dependencies and start the development server:
+
+```bash
+npm install
+npm run dev
+```
