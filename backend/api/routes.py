@@ -320,7 +320,7 @@ async def run_pipeline(url: str, video_id: str, source: VideoSource):
             transcript = await asyncio.to_thread(transcriber.process_video, video_path)
             
             # Step 3: VLM + LLM pipeline (using direct video upload to Gemini)
-            await update_status("generating", 50, "Analyzing cooking steps with video AI...")
+            await update_status("generating", 50, "Analyzing steps and generating recipe...")
             
             vlm_adapter = OpenRouterAdapter()  # Defaults to google/gemini-2.0-flash-001
             llm_adapter = OpenAIAdapter()
