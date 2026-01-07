@@ -23,12 +23,12 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
   const handleTap = (e: React.MouseEvent) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
     const tapX = e.clientX - rect.left
-    const halfWidth = rect.width / 2
+    const zoneWidth = rect.width * 0.3 // 30% width zones on each side
 
-    if (tapX < halfWidth) {
+    if (tapX < zoneWidth) {
       // Tap left - previous step
       setCurrentStep((prev) => Math.max(0, prev - 1))
-    } else {
+    } else if (tapX > rect.width - zoneWidth) {
       // Tap right - next step
       setCurrentStep((prev) => Math.min(totalSteps - 1, prev + 1))
     }
@@ -50,7 +50,7 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
         onClick={handleTap}
       >
         {/* Left panel - Step info */}
-        <div className="flex-1 flex flex-col justify-between p-6 lg:p-8">
+        <div className="flex-[1.2] flex flex-col justify-between p-6 lg:p-8">
           {/* Step counter */}
           <div className="text-white/60 text-sm">
             Step {currentStep + 1} of {totalSteps}
@@ -96,8 +96,8 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
         </div>
 
         {/* Right panel - Video loop */}
-        <div className="flex-1 flex items-center justify-center p-6">
-          <div className="relative w-full max-w-md aspect-square bg-peach-600/30 rounded-2xl overflow-hidden">
+        <div className="flex-[0.8] flex items-center justify-end p-8 pr-12 lg:pr-16">
+          <div className="relative w-full max-w-[300px] lg:max-w-md aspect-square bg-peach-600/30 rounded-2xl overflow-hidden shadow-2xl">
             {hasVideo ? (
               <video
                 ref={videoRef}
@@ -125,12 +125,13 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
 
         {/* Tap zones indicator (subtle) */}
         <div className="absolute inset-0 pointer-events-none flex opacity-0 hover:opacity-100 transition-opacity">
-          <div className="flex-1 flex items-center justify-start pl-4">
+          <div className="w-[30%] flex items-center justify-start pl-4">
             {currentStep > 0 && (
               <span className="text-white/30 text-4xl">‹</span>
             )}
           </div>
-          <div className="flex-1 flex items-center justify-end pr-4">
+          <div className="flex-1" />
+          <div className="w-[30%] flex items-center justify-end pr-4">
             {currentStep < totalSteps - 1 && (
               <span className="text-white/30 text-4xl">›</span>
             )}
