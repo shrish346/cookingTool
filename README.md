@@ -1,6 +1,9 @@
 # MakerAI
 
-image here
+<img width="1920" height="1030" alt="image" src="https://github.com/user-attachments/assets/831b3846-515f-4ec0-91ce-e1c584622d69" />
+<img width="1914" height="1034" alt="image" src="https://github.com/user-attachments/assets/8bca1dbf-bfcf-4d15-b1d0-9651954ee957" />
+<img width="1891" height="994" alt="image" src="https://github.com/user-attachments/assets/cdc4752d-c8e3-4b67-ae32-483bec2d6df3" />
+<img width="1913" height="1026" alt="image" src="https://github.com/user-attachments/assets/6704a561-8286-4616-b95a-86f57db85a78" />
 
 MakerAI is a tool that processes cooking youtube shorts, tik toks, and instagram reels into interactive, step-by-step recipes. It uses computer vision and AI to extract timestamps, generate instructions, and create looping video clips for each culinary step.
 
