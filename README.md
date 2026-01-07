@@ -56,3 +56,6 @@ cd frontend
 npm install
 npm run dev
 ```
+
+### Currently
+Making this a pwa, so people can use it on their phones.
