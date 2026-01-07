@@ -4,7 +4,7 @@
 
 import type { ValidateResponse, ProcessResponse, StatusResponse } from '../types'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_URL
 
 class ApiError extends Error {
   constructor(public status: number, message: string) {
