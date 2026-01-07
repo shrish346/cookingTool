@@ -14,9 +14,9 @@ load_dotenv()
 
 
 class OpenAIAdapter:
-    """Adapter for OpenAI's language models (GPT-4, GPT-3.5)."""
+    """Adapter for OpenAI's language models (GPT-4o, GPT-4)."""
 
-    def __init__(self, model: str = "gpt-4.1"):
+    def __init__(self, model: str = "gpt-4o"):
         self._model = model
         self._client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -94,102 +94,97 @@ Use the transcript to cross-reference ingredient amounts, clarify steps, and add
         # Format micro-actions timeline (with timestamps if available)
         micro_actions_text = self._format_micro_actions(scene_log, use_timestamps)
 
-        return f"""You are a professional chef analyzing scene descriptions from a cooking video to create a complete, well-formatted recipe.
+        return f"""You are a professional chef and video editor analyzing a cooking video to create a structured recipe.
 
+INPUT DATA:
 Video Title: {video_info.title}
 Video Description: {video_info.description or "Not provided"}
+Video Duration: {video_info.duration_seconds} seconds
+
+TRANSCRIPT:
 {transcript_section}
 
-Scene Descriptions from Video Analysis:
+SCENE ANALYSIS:
 {scene_text}
 
-MICRO-ACTIONS TIMELINE (Reference for grouping actions into steps):
+MICRO-ACTIONS TIMELINE:
+(Format: ID | Timestamp | Action Description. Note: Some actions may end with a [PREVIEW] tag.)
 {micro_actions_text}
 
-Your task:
-1. Cross-reference all ingredients across scenes to build a complete ingredient list
-2. GROUP related micro-actions into logical recipe steps (e.g., "add butter", "add garlic", "stir" → "Sauté the Aromatics")
-3. Infer quantities, units, and preparation methods from the scene descriptions
-4. Format everything into a professional recipe
+YOUR TASK:
+1. Build a complete ingredient list.
+2. Group micro-actions into logical, CHRONOLOGICAL recipe steps.
+3. Ensure steps align with the video flow for accurate clip extraction.
 
-Return your response as a JSON object with this exact structure:
+[NEW] GROUPING RULES (CRITICAL):
+1. **The Preview Filter (CRITICAL):** Scan the micro-actions for the `[PREVIEW]` tag. These represent the finished dish shown at the start of the video. **Do NOT include these IDs in any recipe step.** The recipe must start at the first micro-action *without* a preview tag.
+2. **Temporal Contiguity is King:** Only group micro-actions that happen closely together in time.
+3. **The "Set Aside" Rule:** If an ingredient is handled (e.g., "sear chicken"), then set aside while other things happen, and then handled again later, THESE MUST BE TWO SEPARATE STEPS. Do not merge them.
+4. **Linear Flow:** Step 1 must happen before Step 2.
+5. **Clip Tightness:** A step's duration is defined by the start of its first micro-action and the end of its last.
+
+OUTPUT FORMAT:
+Return a valid JSON object with this exact structure:
 
 {{
-    "reasoning": "Explain how you built the recipe from the scene descriptions",
+    "reasoning": "Briefly explain how you handled the timeline, specifically where you determined the preview ended and cooking began.",
     "title": "Recipe name",
-    "description": "Brief description of the dish",
+    "description": "Brief description",
     "servings": 4,
     "prep_time_minutes": 15,
     "cook_time_minutes": 30,
-    "cusine": "Italian",
-    "tags": ["dinner", "pasta", "vegetarian"],
+    "cuisine": "Italian",
+    "tags": ["dinner", "pasta"],
     "ingredients": [
-        {{"name": "ingredient name", "quantity": 2.0, "unit": "cups", "preparation": "diced"}}
+        {{"name": "ingredient", "quantity": 2.0, "unit": "cups", "preparation": "diced"}}
     ],
     "steps": [
         {{
             "order": 1,
-            "title": "Short Step Title",
-            "instruction": "Detailed step description",
+            "title": "Action Verb + Noun (e.g., 'Sear the Chicken')",
+            "instruction": "Detailed instruction for the user.",
             "duration_minutes": 5,
             "tips": ["optional tip"],
-            "micro_action_ids": [500, 501, 502],
+            "micro_action_ids": [3, 4, 5], 
             "has_video_clip": true
         }}
     ],
-    "calories": 450,
-    "protein": 25,
-    "carbs": 50,
-    "fats": 15
+    "nutrition_estimates": {{ "calories": 450, "protein": 25, "carbs": 50, "fats": 15 }}
 }}
 
-Rules:
-- Cross-reference ingredients: if "chopped onions" appears, make sure "onions" is in the ingredients list
-- Resolve temporal ordering: use step_number from temporal_actions, or infer from frame_index
-- CRITICAL: Every ingredient MUST have "quantity" (a positive number) and "unit" (a string like "cups", "tbsp", "oz", "pieces", etc.)
-  - If quantity is not visible, estimate based on typical recipe amounts or use 1.0
-  - If unit is unclear, use common units: "cups" for liquids/grains, "tbsp" for small amounts, "oz" for weights, "pieces" for whole items
-  - Examples: {{"name": "salt", "quantity": 1.0, "unit": "tsp"}}, {{"name": "onion", "quantity": 1.0, "unit": "piece"}}
-- Infer quantities from state_changes and temporal_actions (e.g., "pouring 200ml milk" → quantity: 200, unit: "ml")
-- Combine similar steps if they appear in multiple scenes
-- For optional fields (prep_time_minutes, cook_time_minutes, calories, etc.), you can omit if unknown
+CONSTRAINTS:
+- **Ingredients:** "quantity" must be a number (use 0 if negligible/to taste). "unit" is required (use "count" or "to taste" if unclear).
+- **Steps:** "micro_action_ids" must be a list of integers from the timeline. **Ensure NO IDs marked with [PREVIEW] are included.**
+- **Video Clips:** If a step is purely instructional (e.g., "Preheat oven to 350") and has no visual action in the timeline, set "has_video_clip": false and "micro_action_ids": [].
+- **Noise:** Ignore micro-actions labeled "no relevant cooking action".
 
-MICRO-ACTION GROUPING (CRITICAL):
-- Each step MUST have "title" (short 2-4 word title like "Boil the Pasta")
-- Each step MUST group related micro-actions using "micro_action_ids" (list of IDs from the timeline above)
-- Group actions that belong together semantically (e.g., adding and stirring ingredients for one component)
-- Keep steps focused - don't group unrelated actions just because they're sequential
-- "has_video_clip": Set to false if this step has NO matching micro-actions (e.g., "let rest for 10 min", "preheat oven")
-  - For steps with no video, use an empty list: "micro_action_ids": []
-
-- Return ONLY the JSON object, no other text"""
+Return ONLY the JSON object.
+"""
 
     def _format_scene_log(self, scene_log: SceneLog) -> str:
         """Format scene log into readable text for the prompt."""
         lines = []
+        
+        # If we have a summary in metadata (from direct video analysis), show it first
+        if scene_log.scenes and scene_log.scenes[0].metadata.get("summary"):
+            lines.append(f"Summary: {scene_log.scenes[0].metadata['summary']}")
+            
         for i, scene in enumerate(scene_log.scenes):
-            lines.append(f"\n--- Scene {i+1} (Frame {scene.frame_index}) ---")
+            if len(scene_log.scenes) > 1:
+                lines.append(f"\n--- Scene {i+1} (Frame {scene.frame_index}) ---")
             
             if scene.entities:
-                lines.append("Entities:")
+                lines.append("Entities identified:")
                 for entity in scene.entities:
                     qty = f" ({entity.quantity})" if entity.quantity else ""
                     state = f" [{entity.state}]" if entity.state else ""
                     lines.append(f"  - {entity.name} ({entity.type}){qty}{state}")
             
             if scene.state_changes:
-                lines.append("State Changes:")
+                lines.append("State transformations observed:")
                 for change in scene.state_changes:
                     from_state = f"{change.from_state} → " if change.from_state else ""
                     lines.append(f"  - {change.entity}: {from_state}{change.to_state}")
-            
-            if scene.temporal_actions:
-                lines.append("Actions:")
-                for action in scene.temporal_actions:
-                    step = f"Step {action.step_number}: " if action.step_number else ""
-                    lines.append(f"  - {step}{action.action_description}")
-                    if action.entities_involved:
-                        lines.append(f"    (involves: {', '.join(action.entities_involved)})")
         
         return "\n".join(lines)
     
@@ -215,7 +210,7 @@ MICRO-ACTION GROUPING (CRITICAL):
                     state_change = f"→ {action.state_after}"
                 
                 entity = action.entity or ""
-                ts = f"{action.timestamp_seconds:.1f}s" if action.timestamp_seconds else "?"
+                ts = f"{action.timestamp_seconds:.1f}s" if action.timestamp_seconds is not None else "?"
                 duration = f"{action.duration_seconds:.1f}s" if action.duration_seconds else "-"
                 
                 lines.append(
@@ -271,12 +266,30 @@ MICRO-ACTION GROUPING (CRITICAL):
         if not isinstance(data.get("steps"), list):
             data["steps"] = []
         
+        # Handle potential nested nutrition object
+        if "nutrition_estimates" in data:
+            for k, v in data["nutrition_estimates"].items():
+                if k not in data:
+                    data[k] = v
+        
+        if "nutrition" in data and isinstance(data["nutrition"], dict):
+            for k, v in data["nutrition"].items():
+                if k not in data:
+                    data[k] = v
+            
         # Validate and fix ingredients - ensure all have quantity and unit
         validated_ingredients = []
         for ing in data.get("ingredients", []):
             # Ensure quantity exists and is valid
             if "quantity" not in ing or ing["quantity"] is None:
                 ing["quantity"] = 1.0  # Default to 1 if missing
+            elif isinstance(ing["quantity"], str):
+                # Try to extract number from string (e.g., "2 cups" -> 2.0)
+                match = re.search(r"(\d+\.?\d*)", ing["quantity"])
+                if match:
+                    ing["quantity"] = float(match.group(1))
+                else:
+                    ing["quantity"] = 1.0
             elif not isinstance(ing["quantity"], (int, float)) or ing["quantity"] <= 0:
                 ing["quantity"] = 1.0  # Fix invalid quantities
             

@@ -45,7 +45,7 @@ class Recipe(BaseModel):
     prep_time_minutes: Optional[int] = None
     cook_time_minutes: Optional[int] = None
     source_url: Optional[str] = None
-    cusine: Optional[str] = None
+    cuisine: Optional[str] = None
     tags: Optional[list[str]] = None
     nutrition: Optional[dict] = None
     calories: Optional[int] = None

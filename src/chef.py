@@ -61,7 +61,7 @@ class RecipeChef:
             A validated Recipe object
         """
         # Stage 1: VLM analyzes frames and generates scene descriptions
-        scene_descriptions = self._vlm.analyze_scenes(
+        scene_descriptions = self._vlm.analyze_video_direct(
             video_info,
             frames,
             transcript,
@@ -137,7 +137,8 @@ class RecipeChef:
         self,
         video_info: VideoInfo,
         video_path: str,
-        transcript: str | None = None
+        transcript: str | None = None,
+        debug: bool = True
     ) -> Recipe:
         """
         Generate a recipe by uploading video directly to a video-capable VLM.
@@ -155,7 +156,7 @@ class RecipeChef:
             A validated Recipe object with timestamp-based video clips
         """
         # Stage 1: VLM analyzes video directly (no frame extraction)
-        scene_log = self._vlm.analyze_video_direct(video_info, video_path)
+        scene_log = self._vlm.analyze_video_direct(video_info, video_path, debug=True)
         
         # Optionally save SceneLog for debugging/caching
         if self._save_scenes_path:

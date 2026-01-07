@@ -8,7 +8,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 from ..downloaders.base import VideoInfo
-from ..schemas import Recipe, SceneLog, compute_frame_indices_from_micro_actions
+from ..schemas import Recipe, SceneLog, compute_frame_indices_from_micro_actions, compute_timestamps_from_micro_actions
 
 load_dotenv()
 
@@ -32,7 +32,8 @@ class OpenRouterLLMAdapter:
         self,
         scene_log: SceneLog,
         video_info: VideoInfo,
-        transcript: str | None = None
+        transcript: str | None = None,
+        use_timestamps: bool = True
     ) -> Recipe:
         """
         Generate a structured recipe from accumulated scene descriptions.
@@ -41,11 +42,12 @@ class OpenRouterLLMAdapter:
             scene_log: Accumulated scene descriptions from VLM analysis
             video_info: Metadata about the video (title, description, etc.)
             transcript: Optional audio transcript from the video
+            use_timestamps: If True, use timestamp-based mapping.
             
         Returns:
             A validated Recipe object
         """
-        prompt = self._build_prompt(scene_log, video_info, transcript)
+        prompt = self._build_prompt(scene_log, video_info, transcript, use_timestamps)
         
         response = self._client.chat.completions.create(
             model=self._model,
@@ -57,8 +59,13 @@ class OpenRouterLLMAdapter:
         content = response.choices[0].message.content
         recipe = self._parse_response(content, video_info)
         
-        # Post-process: compute frame indices from micro_action_ids
-        recipe = compute_frame_indices_from_micro_actions(recipe, scene_log)
+        # Post-process: compute video clip timing from micro_action_ids
+        if use_timestamps:
+            recipe = compute_timestamps_from_micro_actions(recipe, scene_log)
+            # Also compute frame indices for backward compatibility
+            recipe = compute_frame_indices_from_micro_actions(recipe, scene_log)
+        else:
+            recipe = compute_frame_indices_from_micro_actions(recipe, scene_log)
         
         return recipe
 
@@ -66,7 +73,8 @@ class OpenRouterLLMAdapter:
         self,
         scene_log: SceneLog,
         video_info: VideoInfo,
-        transcript: str | None = None
+        transcript: str | None = None,
+        use_timestamps: bool = True
     ) -> str:
         """Create the instruction prompt for recipe generation."""
         # Format scene descriptions for the prompt
@@ -85,7 +93,7 @@ Use the transcript to cross-reference ingredient amounts, clarify steps, and add
 """
 
         # Format micro-actions timeline
-        micro_actions_text = self._format_micro_actions(scene_log)
+        micro_actions_text = self._format_micro_actions(scene_log, use_timestamps)
 
         return f"""You are a professional chef analyzing scene descriptions from a cooking video to create a complete, well-formatted recipe.
 
@@ -114,7 +122,7 @@ Return your response as a JSON object with this exact structure:
     "servings": 4,
     "prep_time_minutes": 15,
     "cook_time_minutes": 30,
-    "cusine": "Italian",
+    "cuisine": "Italian",
     "tags": ["dinner", "pasta", "vegetarian"],
     "ingredients": [
         {{"name": "ingredient name", "quantity": 2.0, "unit": "cups", "preparation": "diced"}}
@@ -186,27 +194,49 @@ MICRO-ACTION GROUPING (CRITICAL):
         
         return "\n".join(lines)
     
-    def _format_micro_actions(self, scene_log: SceneLog) -> str:
+    def _format_micro_actions(self, scene_log: SceneLog, use_timestamps: bool = True) -> str:
         """Format micro-actions into a timeline for precise clip mapping."""
         all_actions = scene_log.get_all_micro_actions()
         
         if not all_actions:
             return "(No micro-actions extracted - using scene-based mapping)"
         
-        lines = ["ID    | Frame | Action                        | Entity      | State Change"]
-        lines.append("-" * 80)
+        # Check if we have timestamp data
+        has_timestamps = any(a.timestamp_seconds is not None for a in all_actions)
         
-        for action in all_actions:
-            state_change = ""
-            if action.state_before and action.state_after:
-                state_change = f"{action.state_before} → {action.state_after}"
-            elif action.state_after:
-                state_change = f"→ {action.state_after}"
+        if has_timestamps and use_timestamps:
+            lines = ["ID  | Timestamp | Duration | Action                        | Entity      | State Change"]
+            lines.append("-" * 95)
             
-            entity = action.entity or ""
-            lines.append(
-                f"{action.id:5} | {action.precise_frame_index:5.2f} | {action.action[:30]:<30} | {entity[:12]:<12} | {state_change}"
-            )
+            for action in all_actions:
+                state_change = ""
+                if action.state_before and action.state_after:
+                    state_change = f"{action.state_before} → {action.state_after}"
+                elif action.state_after:
+                    state_change = f"→ {action.state_after}"
+                
+                entity = action.entity or ""
+                ts = f"{action.timestamp_seconds:.1f}s" if action.timestamp_seconds is not None else "?"
+                duration = f"{action.duration_seconds:.1f}s" if action.duration_seconds else "-"
+                
+                lines.append(
+                    f"{action.id:3} | {ts:>9} | {duration:>8} | {action.action[:30]:<30} | {entity[:12]:<12} | {state_change}"
+                )
+        else:
+            lines = ["ID    | Frame | Action                        | Entity      | State Change"]
+            lines.append("-" * 80)
+            
+            for action in all_actions:
+                state_change = ""
+                if action.state_before and action.state_after:
+                    state_change = f"{action.state_before} → {action.state_after}"
+                elif action.state_after:
+                    state_change = f"→ {action.state_after}"
+                
+                entity = action.entity or ""
+                lines.append(
+                    f"{action.id:5} | {action.precise_frame_index:5.2f} | {action.action[:30]:<30} | {entity[:12]:<12} | {state_change}"
+                )
         
         return "\n".join(lines)
 

@@ -105,7 +105,7 @@ Return your response as a JSON object with this exact structure:
     "servings": 4,
     "prep_time_minutes": 15,
     "cook_time_minutes": 30,
-    "cusine": "Italian",
+    "cuisine": "Italian",
     "tags": ["dinner", "pasta", "vegetarian"],
     "ingredients": [
         {{"name": "ingredient name", "quantity": 2.0, "unit": "cups", "preparation": "diced"}}

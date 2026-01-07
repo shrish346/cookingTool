@@ -67,6 +67,7 @@ class VLMAdapter(Protocol):
         self,
         video_info: VideoInfo,
         video_path: str,
+        debug: bool = False,
     ) -> SceneLog:
         """
         Analyze a video by uploading it directly (no frame extraction).
@@ -77,6 +78,7 @@ class VLMAdapter(Protocol):
         Args:
             video_info: Metadata about the video
             video_path: Path to the local video file
+            debug: Whether to print debug information
             
         Returns:
             SceneLog containing all micro-actions with timestamps

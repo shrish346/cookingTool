@@ -391,45 +391,62 @@ Audio Transcript: {transcript}
 Use the transcript for context, but base TIMESTAMPS on what you SEE in frames.
 """
 
-        return f"""Watch these cooking video frames carefully and extract ALL cooking actions you observe.
+        return f"""You are a forensic video analyst specializing in culinary processes. Your goal is to create a factual log of cooking actions based ONLY on visual evidence.
 
-Video Title: {video_info.title}
-{transcript_section}
+*** CONTEXT AWARENESS: THE "HERO SHOT" ***
+Cooking videos often are non-linear. They usually begin with a "Preview" or "Hero Shot" (showing the finished dish, eating it, or plating it) before cutting back in time to show the raw ingredients.
+- **The Reset Point:** Identify the moment the video cuts from a finished/cooked state to a raw/empty state.
+- **Tagging:** Any action occurring *before* this reset point involving the finished dish must be tagged.
 
-FRAME TIMESTAMPS: {frame_info}
-({len(frames_with_timestamps)} frames from {start_ts:.1f}s to {end_ts:.1f}s)
+*** STEP 1: VISUAL SCRATCHPAD (Mandatory) ***
+Watch the video chronologically. Create a raw text log of distinct physical movements.
+- Format: [Start MM:SS - End MM:SS] : [Entity] -> [Action]
+- Multitasking: If multiple actions occur simultaneously (e.g., stirring while pouring), list them as SEPARATE lines.
+- Constraint: If nothing significant happens for 5 seconds, do NOT write anything.
 
-YOUR TASK: Identify cooking actions and map them to EXACT TIMESTAMPS from the frames.
-Available timestamps: {frame_info}
+*** STEP 2: JSON GENERATION ***
+Convert your scratchpad into valid JSON.
 
-This is a cooking video. Look for: cutting, chopping, stirring, adding ingredients, seasoning, flipping, cooking, plating, etc.
+CRITICAL FORMATTING RULES:
+1. Do not nest actions. Every action is a separate object.
+2. Check your brackets. Ensure every '{{' has a closing '}}'.
+3. No Duplicates: Do not repeat the same action for the same timestamp.
 
-Return as JSON:
-
+JSON EXAMPLE (Follow this structure exactly):
 {{
-    "entities": [
-        {{"name": "chicken", "type": "ingredient", "quantity": "1 lb", "state": "raw", "confidence": 0.9}}
-    ],
-    "state_changes": [
-        {{"entity": "chicken", "from_state": "raw", "to_state": "cooked", "frame_index": 0, "confidence": 0.8}}
-    ],
-    "micro_actions": [
-        {{"action": "add oil to pan", "timestamp_seconds": {start_ts + 0.5}, "duration_seconds": 2.0, "frame_index": 0, "relative_position": 0.0, "entity": "oil", "state_before": null, "state_after": "in pan", "confidence": 0.9}},
-        {{"action": "season chicken", "timestamp_seconds": {start_ts + 2.0}, "duration_seconds": 1.5, "frame_index": 0, "relative_position": 0.3, "entity": "chicken", "state_before": "raw", "state_after": "seasoned", "confidence": 0.9}}
-    ]
+  "summary": "...",
+  "entities": [ ... ],
+  "micro_actions": [
+    {{
+      "action": "Taking a bite of the lasagna [PREVIEW]",
+      "start": "00:00",
+      "end": "00:05",
+      "entity": "Fork",
+      "concurrent_with_other_action": false
+    }},
+    {{
+      "action": "Slicing Cucumber into Rounds",
+      "start": "00:28",
+      "end": "00:30",
+      "entity": "Knife",
+      "concurrent_with_other_action": false
+    }}
+  ]
 }}
 
-RULES:
-- timestamp_seconds: MUST be one of the frame timestamps: {frame_info}
-- duration_seconds: Estimate 1-5 seconds for most actions
-- frame_index: Set to 0 (will be adjusted)
-- relative_position: Position within this chunk (0.0-1.0)
-- Only report VISUALLY OBSERVED actions
-- Be GRANULAR: each small action is separate
-- entity type: "ingredient", "tool", or "appliance" only
-- If no cooking action visible, return empty micro_actions: []
+STRICT ACCURACY RULES:
+1. Visual Evidence Only: If you do not see a hand touching an object or a tool moving, do not list it.
+2. **Preview Detection:** If an action involves the *finished* product (e.g., tasting, cutting a fully cooked slice) but appears at the start of the video *before* raw ingredients are introduced, you MUST append `[PREVIEW]` to the end of the action string.
+3. Valid Actions: Include both STATE CHANGES and ACTIVE PROCESSES.
+   - Output format: [Action Verb] + [Object] + [Resulting State/Location] + [Optional PREVIEW tag]
+   - Transformation: If object changes form, describe it (e.g., "slicing carrots into rounds").
+   - Destination: If object moves, describe container.
+   - Completion: If action is a process, describe goal state (e.g., "whisking until frothy").
+4. Concurrency: List simultaneous actions separately.
+5. Entity Consistency: Use exact names from the 'entities' list.
+6. Time Format: "MM:SS".
 
-Return ONLY JSON."""
+Return ONLY the Scratchpad followed by the JSON object."""
 
     def _build_timestamp_chunk_messages(
         self,
@@ -613,7 +630,7 @@ Analyze carefully and extract the complete recipe. Return your response as a JSO
     "servings": 4,
     "prep_time_minutes": 15,
     "cook_time_minutes": 30,
-    "cusine": "Italian",
+    "cuisine": "Italian",
     "tags": ["dinner", "pasta", "vegetarian"],
     "ingredients": [
         {{"name": "ingredient name", "quantity": 2.0, "unit": "cups", "preparation": "diced"}}
@@ -722,96 +739,62 @@ Rules:
         else:
             frame_info = f"Analyzing frame {frame_index}."
 
-        return f"""You are analyzing cooking video frames to extract structured scene descriptions.
+        return f"""You are a forensic video analyst specializing in culinary processes. Your goal is to create a factual log of cooking actions based ONLY on visual evidence.
 
-CRITICAL RULES:
-- Only describe actions you can VISUALLY SEE happening in the provided frames
-- Do NOT infer or assume actions that might have happened but are not visible
-- If frames show a static scene (finished dish, ingredients laid out), return empty micro_actions list
+*** CONTEXT AWARENESS: THE "HERO SHOT" ***
+Cooking videos often are non-linear. They usually begin with a "Preview" or "Hero Shot" (showing the finished dish, eating it, or plating it) before cutting back in time to show the raw ingredients.
+- **The Reset Point:** Identify the moment the video cuts from a finished/cooked state to a raw/empty state.
+- **Tagging:** Any action occurring *before* this reset point involving the finished dish must be tagged.
 
-Video Title: {video_info.title}
-Video Description: {video_info.description or "Not provided"}
-{frame_info}
+*** STEP 1: VISUAL SCRATCHPAD (Mandatory) ***
+Watch the video chronologically. Create a raw text log of distinct physical movements.
+- Format: [Start MM:SS - End MM:SS] : [Entity] -> [Action]
+- Multitasking: If multiple actions occur simultaneously (e.g., stirring while pouring), list them as SEPARATE lines.
+- Constraint: If nothing significant happens for 5 seconds, do NOT write anything.
 
-Focus on FOUR key pillars:
+*** STEP 2: JSON GENERATION ***
+Convert your scratchpad into valid JSON.
 
-1. ENTITY IDENTIFICATION: List all ingredients, tools (e.g., "cast iron skillet", "chef's knife"), and appliances (e.g., "air fryer", "oven") visible in this frame/chunk.
-   CRITICAL RULES FOR ENTITY TYPES:
-   - Entity type MUST be EXACTLY one of these three strings: "ingredient", "tool", or "appliance"
-   - DO NOT use "dish", "container", "plate", "bowl", "pan", "pot", or any other type
-   - If you see a finished dish, focus on its ingredients, not the dish itself
-   - If you see a plate/bowl/pan, classify it as "tool" (cooking vessel)
-   - If you see an oven/stove/microwave, classify it as "appliance"
-   - Food items are always "ingredient"
-   - Cooking utensils are always "tool"
+CRITICAL FORMATTING RULES:
+1. Do not nest actions. Every action is a separate object.
+2. Check your brackets. Ensure every '{{' has a closing '}}'.
+3. No Duplicates: Do not repeat the same action for the same timestamp.
 
-2. STATE CHANGES: Identify any transformations or state changes. Did onions go from "raw" to "translucent"? Did liquid go from "cold" to "boiling" or "simmering"? Did dough go from "sticky" to "smooth"?
-   CRITICAL: Every state_change MUST include "frame_index" set to {frame_index} (the current frame index).
-
-3. TEMPORAL ACTIONS: Describe what action is being performed (e.g., "chopping onions", "pouring 200ml milk", "adding 2 eggs to flour mixture"). If you can determine a step number, include it.
-   CRITICAL: Every temporal_action MUST include "frame_index" set to {frame_index} (the current frame index).
-
-4. MICRO-ACTIONS (MOST IMPORTANT): Break down ALL individual atomic cooking actions with PRECISE timing.
-   - Each micro-action is a SINGLE, ATOMIC action like "add salt", "stir pan", "flip chicken", "pour oil"
-   - ONLY include actions you can VISUALLY SEE happening in the frames - do NOT infer from transcript
-   - relative_position MUST reflect WHICH FRAME in the chunk shows the action:
-     * If you receive {len(frame_indices) if frame_indices else 12} frames and an action is visible in the 1st frame → 0.0
-     * If an action is visible in the middle frames → 0.5
-     * If an action is visible in the last frame → 1.0
-     * IMPORTANT: If the first few frames show intro/static content and cooking starts at frame 3, the first action should have relative_position ~0.25 (3/12), NOT 0.0
-   - If ANY frames show intro content, title cards, or finished dish (no active cooking), add a single micro-action:
-     {{"action": "no relevant cooking action", "frame_index": {frame_index}, "relative_position": <position where intro ends>, "entity": null, "state_before": null, "state_after": null}}
-   - This enables precise video clip extraction, so BE GRANULAR and PRECISE with timing based on actual frame positions
-   - If ALL frames show static content with no cooking, output an empty micro_actions list
-
-Return your response as a JSON object with this exact structure:
-
+JSON EXAMPLE (Follow this structure exactly):
 {{
-    "entities": [
-        {{"name": "onion", "type": "ingredient", "quantity": "1 large", "state": "raw", "confidence": 0.95}},
-        {{"name": "chef's knife", "type": "tool", "confidence": 0.9}}
-    ],
-    "state_changes": [
-        {{"entity": "onion", "from_state": "raw", "to_state": "chopped", "frame_index": {frame_index}, "confidence": 0.85}}
-    ],
-    "temporal_actions": [
-        {{"step_number": 1, "action_description": "chopping onions", "frame_index": {frame_index}, "entities_involved": ["onion", "chef's knife"]}}
-    ],
-    "micro_actions": [
-        {{"action": "no relevant cooking action", "frame_index": {frame_index}, "relative_position": 0.0, "entity": null, "state_before": null, "state_after": null}},
-        {{"action": "add butter to pan", "frame_index": {frame_index}, "relative_position": 0.25, "entity": "butter", "state_before": "solid", "state_after": "melting"}},
-        {{"action": "swirl butter around", "frame_index": {frame_index}, "relative_position": 0.4, "entity": "butter", "state_before": "melting", "state_after": "melted"}},
-        {{"action": "add diced onions", "frame_index": {frame_index}, "relative_position": 0.6, "entity": "onions", "state_before": null, "state_after": "in pan"}},
-        {{"action": "stir onions", "frame_index": {frame_index}, "relative_position": 0.8, "entity": "onions", "state_before": "raw", "state_after": "cooking"}}
-    ],
-    "metadata": {{"notes": "Additional observations or uncertainties"}}
+  "summary": "...",
+  "entities": [ ... ],
+  "micro_actions": [
+    {{
+      "action": "Taking a bite of the lasagna [PREVIEW]",
+      "start": "00:00",
+      "end": "00:05",
+      "entity": "Fork",
+      "concurrent_with_other_action": false
+    }},
+    {{
+      "action": "Slicing Cucumber into Rounds",
+      "start": "00:28",
+      "end": "00:30",
+      "entity": "Knife",
+      "concurrent_with_other_action": false
+    }}
+  ]
 }}
 
-Rules:
-- entities: List ALL visible ingredients, tools, and appliances
-  - type MUST be EXACTLY "ingredient", "tool", or "appliance" - NO OTHER VALUES ALLOWED
-  - If you see a dish/plate/bowl/pan/pot, classify it as "tool"
-  - If you see a finished dish, focus on its ingredients, not the dish itself
-- state_changes: Only include if you observe a transformation (can be empty list)
-  - REQUIRED: Every state_change MUST have "frame_index" set to {frame_index}
-- temporal_actions: Describe actions being performed (can be empty list if no clear action)
-  - REQUIRED: Every temporal_action MUST have "frame_index" set to {frame_index}
-- micro_actions: CRITICAL - Break down EVERY VISUALLY OBSERVED action into atomic steps
-  - ONLY include actions you can SEE happening in the frames - NOT actions inferred from transcript
-  - If ALL frames show a static scene with no action, return empty list: "micro_actions": []
-  - If SOME frames show intro/outro/static content, add: {{"action": "no relevant cooking action", "relative_position": <where it ends>}}
-  - action: Short, specific description (e.g., "add salt", "flip chicken", "pour oil")
-  - frame_index: MUST be {frame_index}
-  - relative_position: Float 0.0-1.0 based on WHICH FRAME shows the action (NOT just order of actions)
-    * If this chunk has 12 frames and an action appears in frame 4, relative_position = 4/12 ≈ 0.33
-  - entity: What is being acted on (optional but helpful)
-  - state_before/state_after: State changes (optional but helpful)
-- step_number: Only include if you can reasonably determine the sequence (can be null)
-- confidence: Optional, between 0.0 and 1.0
-- quantity: Optional, include if visible (e.g., "2 cups", "200ml", "3 eggs")
-- Return ONLY the JSON object, no other text
-- DO NOT include any entity with type other than "ingredient", "tool", or "appliance"
-- DO NOT omit frame_index from state_changes, temporal_actions, or micro_actions"""
+STRICT ACCURACY RULES:
+1. Visual Evidence Only: If you do not see a hand touching an object or a tool moving, do not list it.
+2. **Preview Detection:** If an action involves the *finished* product (e.g., tasting, cutting a fully cooked slice) but appears at the start of the video *before* raw ingredients are introduced, you MUST append `[PREVIEW]` to the end of the action string.
+3. Valid Actions: Include both STATE CHANGES and ACTIVE PROCESSES.
+   - Output format: [Action Verb] + [Object] + [Resulting State/Location] + [Optional PREVIEW tag]
+   - Transformation: If object changes form, describe it (e.g., "slicing carrots into rounds").
+   - Destination: If object moves, describe container.
+   - Completion: If action is a process, describe goal state (e.g., "whisking until frothy").
+4. Concurrency: List simultaneous actions separately.
+5. Entity Consistency: Use exact names from the 'entities' list.
+6. Time Format: "MM:SS".
+
+Return ONLY the Scratchpad followed by the JSON object."""
     
     def _build_scene_messages(
         self,
@@ -924,7 +907,8 @@ Rules:
         self,
         video_info: VideoInfo,
         video_path: str,
-        max_retries: int = 3
+        max_retries: int = 3,
+        debug: bool = False
     ) -> SceneLog:
         """
         Analyze video by uploading it directly as base64.
@@ -936,6 +920,7 @@ Rules:
             video_info: Metadata about the video
             video_path: Path to the local video file
             max_retries: Maximum retry attempts
+            debug: Whether to print debug information (like micro-actions timeline)
             
         Returns:
             SceneLog containing all micro-actions with timestamps
@@ -945,8 +930,8 @@ Rules:
         compressed_path, size_mb = compress_video_for_api(
             video_path,
             max_size_mb=10.0,
-            target_width=480,
-            target_fps=8
+            target_width=360,
+            target_fps=2
         )
         
         try:
@@ -992,6 +977,19 @@ Rules:
                     content = response.choices[0].message.content
                     scene = self._parse_video_direct_response(content, video_info.duration_seconds)
                     
+                    # Print micro-actions if debug is True
+                    if debug:
+                        print("\n" + "="*80)
+                        print("EXTRACTED MICRO-ACTIONS TIMELINE:")
+                        print("="*80)
+                        print(f"Total actions: {len(scene.micro_actions)}")
+                        print("-" * 80)
+                        for ma in scene.micro_actions:
+                            ts = f"{ma.timestamp_seconds:.1f}s"
+                            dur = f" (+{ma.duration_seconds:.1f}s)" if ma.duration_seconds else ""
+                            print(f"  [{ts}{dur}] {ma.action}")
+                        print("="*80 + "\n")
+
                     return SceneLog(
                         scenes=[scene],
                         video_info={
