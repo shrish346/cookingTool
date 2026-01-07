@@ -2,7 +2,7 @@
 
 image here
 
-Chef's Loop is a tool that processes cooking youtube shorts, tik toks, and instagram reels into interactive, step-by-step recipes. It uses computer vision and AI to extract timestamps, generate instructions, and create looping video clips for each culinary step.
+MakerAI is a tool that processes cooking youtube shorts, tik toks, and instagram reels into interactive, step-by-step recipes. It uses computer vision and AI to extract timestamps, generate instructions, and create looping video clips for each culinary step.
 
 ## Docker Setup
 
