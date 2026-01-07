@@ -351,25 +351,12 @@ async def run_pipeline(url: str, video_id: str, source: VideoSource):
                 bucket_name=settings.s3_bucket_name
             )
             
-            # Get actual video FPS and calculate frame interval
-            video_fps = await asyncio.to_thread(clip_extractor.get_video_fps, video_path)
-            total_frames = await asyncio.to_thread(clip_extractor.get_total_frames, video_path)
-            
-            # The dense extraction uses a target FPS of 2.0
-            # Frame interval = video_fps / target_fps
-            target_fps = 2.0
-            frame_interval = max(1, int(video_fps / target_fps))
-            
-            print(f"[ClipExtractor] Video: {total_frames} frames, fps={video_fps}, interval={frame_interval}")
-            
             # Extract and upload clips for each step
             updated_steps = await asyncio.to_thread(
                 clip_extractor.extract_and_upload_clips,
                 video_path=video_path,
                 video_id=video_id,
-                steps=recipe_dict["steps"],
-                fps=video_fps,
-                frame_interval=frame_interval
+                steps=recipe_dict["steps"]
             )
             
             # Update recipe with clip URLs
