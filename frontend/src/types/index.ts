@@ -28,7 +28,7 @@ export interface Recipe {
   prep_time_minutes?: number
   cook_time_minutes?: number
   source_url?: string
-  cusine?: string
+  cuisine?: string
   tags?: string[]
   video_id?: string
   video_fps?: number
