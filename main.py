@@ -56,8 +56,8 @@ def format_recipe_markdown(recipe) -> str:
     if recipe.servings:
         lines.append(f"Serves: {recipe.servings}\n")
     
-    if recipe.cusine:
-        lines.append(f"Cuisine: {recipe.cusine}\n")
+    if recipe.cuisine:
+        lines.append(f"Cuisine: {recipe.cuisine}\n")
     
     if recipe.tags:
         lines.append(f"Tags: {', '.join(recipe.tags)}\n")
