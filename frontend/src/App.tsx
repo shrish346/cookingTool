@@ -173,7 +173,7 @@ export default function App() {
 
   // Render current view
   return (
-    <div className="min-h-screen bg-peach">
+    <div className="h-full bg-peach overflow-hidden">
       {state === 'landing' && (
         <LandingView
           onSubmit={handleSubmit}

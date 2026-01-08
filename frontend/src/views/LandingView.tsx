@@ -21,7 +21,7 @@ export function LandingView({ onSubmit, isValidating, error }: LandingViewProps)
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-6">
+    <div className="h-full overflow-y-auto flex flex-col items-center justify-center p-6">
       {/* Logo and Title */}
       <div className="flex flex-col items-center mb-12 animate-fade-in">
         <ChefIcon className="w-20 h-20 text-white mb-6" />

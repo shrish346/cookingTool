@@ -10,7 +10,7 @@ interface LoadingViewProps {
  */
 export function LoadingView({ progress, message }: LoadingViewProps) {
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-6">
+    <div className="h-full overflow-y-auto flex flex-col items-center justify-center p-6">
       {/* Status message */}
       <div className="text-center mb-8 animate-fade-in">
         <h2 className="text-2xl font-display font-semibold text-white mb-2">

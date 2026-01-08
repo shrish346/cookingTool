@@ -52,12 +52,12 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
         {/* Left panel - Step info */}
         <div className="flex-[1.2] flex flex-col justify-between p-6 lg:p-8">
           {/* Step counter */}
-          <div className="text-white/60 text-sm">
+          <div className="text-white/60 text-sm ml-9 -mt-2">
             Step {currentStep + 1} of {totalSteps}
           </div>
 
           {/* Step title and instruction */}
-          <div className="flex-1 flex flex-col justify-center">
+          <div className="flex-1 flex flex-col justify-center ml-9 -mt-12">
             <h1 className="text-3xl lg:text-4xl font-display font-bold text-white mb-4">
               {step.display_title || step.title || `Step ${step.order}`}
             </h1>

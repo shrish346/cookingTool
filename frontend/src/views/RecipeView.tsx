@@ -12,7 +12,7 @@ interface RecipeViewProps {
  */
 export function RecipeView({ recipe, clipsReady, onStartCooking, onRestart }: RecipeViewProps) {
   return (
-    <div className="min-h-screen pb-24">
+    <div className="h-full overflow-y-auto pb-32 scroll-smooth">
       {/* Header */}
       <div className="p-6 pt-8">
         <h1 className="text-3xl md:text-4xl font-display font-bold text-white mb-2 animate-fade-in">
