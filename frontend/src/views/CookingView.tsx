@@ -19,6 +19,10 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
   const totalSteps = recipe.steps.length
   const hasVideo = Boolean(step?.video_clip_url)
 
+  // Get next/prev step URLs for preloading
+  const nextVideoUrl = recipe.steps[currentStep + 1]?.video_clip_url
+  const prevVideoUrl = recipe.steps[currentStep - 1]?.video_clip_url
+
   // Handle tap navigation
   const handleTap = (e: React.MouseEvent) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -38,13 +42,19 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
   useEffect(() => {
     if (videoRef.current && hasVideo) {
       videoRef.current.play().catch(() => {
-        // Autoplay might be blocked
+        // Autoplay might be blocked by browser
       })
     }
   }, [currentStep, hasVideo])
 
   return (
     <RotateOverlay>
+      {/* Hidden preloading videos */}
+      <div className="hidden" aria-hidden="true">
+        {nextVideoUrl && <video src={nextVideoUrl} preload="auto" muted />}
+        {prevVideoUrl && <video src={prevVideoUrl} preload="auto" muted />}
+      </div>
+
       <div
         className="cooking-mode flex"
         onClick={handleTap}
@@ -100,10 +110,12 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
           <div className="relative w-full max-w-[300px] lg:max-w-md aspect-square bg-peach-600/30 rounded-2xl overflow-hidden shadow-2xl">
             {hasVideo ? (
               <video
+                key={step.video_clip_url}
                 ref={videoRef}
                 src={step.video_clip_url}
                 loop
                 muted
+                autoPlay
                 playsInline
                 className="w-full h-full object-cover"
               />
