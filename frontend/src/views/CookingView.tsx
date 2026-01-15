@@ -11,6 +11,7 @@ interface CookingViewProps {
 /**
  * Landscape cooking mode with video loops and step navigation
  */
+
 export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) {
   const [currentStep, setCurrentStep] = useState(0)
   const videoRef = useRef<HTMLVideoElement>(null)
