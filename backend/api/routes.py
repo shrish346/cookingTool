@@ -115,9 +115,12 @@ async def deep_validate_url(url: str, source: VideoSource, video_id: str) -> tup
     Returns (is_valid, error_message).
     """
     from src.downloaders.factory import get_downloader
+    from backend.api.config import get_settings
+    
+    settings = get_settings()
     
     try:
-        downloader = get_downloader(url)
+        downloader = get_downloader(url, cookies=settings.youtube_cookies)
         if downloader is None:
             return False, "Unsupported video platform"
         
@@ -309,7 +312,7 @@ async def run_pipeline(url: str, video_id: str, source: VideoSource):
         # Step 1: Download video
         await update_status("downloading", 10, "Downloading video...")
         
-        downloader = get_downloader(url)
+        downloader = get_downloader(url, cookies=settings.youtube_cookies)
         video_info = await asyncio.to_thread(downloader.download, url)
         video_path = str(video_info.file_path)
         try:
