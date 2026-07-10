@@ -5,6 +5,7 @@ Provides Redis and S3 clients.
 import json
 from typing import Optional
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 import redis.asyncio as redis
 import boto3
@@ -36,13 +37,19 @@ def get_s3_client():
     global _s3_client
     if _s3_client is None:
         settings = get_settings()
+        # The endpoint must be host-only. A trailing /<bucket> (an easy paste
+        # mistake) makes boto3 double the bucket into every key, so strip any path.
+        endpoint = settings.s3_endpoint_url.strip()
+        if endpoint:
+            parsed = urlparse(endpoint)
+            endpoint = f"{parsed.scheme}://{parsed.netloc}"
         _s3_client = boto3.client(
             's3',
             aws_access_key_id=settings.s3_access_key_id,
             aws_secret_access_key=settings.s3_secret_access_key,
             region_name=settings.s3_region,
             # None routes to real AWS; set it to target R2 instead.
-            endpoint_url=settings.s3_endpoint_url or None,
+            endpoint_url=endpoint or None,
         )
     return _s3_client
 
