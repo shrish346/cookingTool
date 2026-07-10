@@ -9,7 +9,11 @@ Usage:
 import sys
 import argparse
 import json
+import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from src.downloaders.factory import get_downloader
 from src.downloaders.youtube import YouTubeDownloader
@@ -174,7 +178,7 @@ Examples:
             video_path = str(input_path)
         else:
             # URL - download it
-            downloader = get_downloader(args.input)
+            downloader = get_downloader(args.input, cookies=os.getenv("YOUTUBE_COOKIES"))
             if not downloader:
                 print(f"Error: Unsupported video URL: {args.input}", file=sys.stderr)
                 sys.exit(1)
