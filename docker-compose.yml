@@ -39,8 +39,36 @@ services:
       - ./frontend:/app
       - /app/node_modules
     environment:
+      # For phone testing on your LAN, swap localhost for your machine's IP.
       - VITE_API_URL=http://localhost:8000
+
+  # --- Monitoring (disabled for now; files kept, uncomment to re-enable) ---
+  # Prometheus also needs prometheus-fastapi-instrumentator wired into
+  # backend/api/main.py before it has anything to scrape.
+  #
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #   depends_on:
+  #     - backend
+  #
+  # grafana:
+  #   image: grafana/grafana-oss:latest
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - GF_SECURITY_ADMIN_USER=admin
+  #     - GF_SECURITY_ADMIN_PASSWORD=admin
+  #   depends_on:
+  #     - prometheus
+  #   volumes:
+  #     - grafana_data:/var/lib/grafana
 
 volumes:
   redis_data:
+  # grafana_data:
+
 
