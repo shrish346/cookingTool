@@ -194,8 +194,12 @@ class VideoClipExtractor:
                 "CacheControl": "max-age=31536000",  # 1 year cache
             }
         )
-        
-        # Return a region-aware virtual-hosted–style S3 URL.
+
+        if self.settings.s3_public_base_url:
+            base = self.settings.s3_public_base_url.rstrip("/")
+            return f"{base}/{s3_key}"
+
+        # Fall back to a region-aware virtual-hosted–style AWS S3 URL.
         # Using the region hostname avoids 301 redirects for buckets outside us-east-1.
-        return f"https://{self.bucket_name}.s3.{self.settings.aws_region}.amazonaws.com/{s3_key}"
+        return f"https://{self.bucket_name}.s3.{self.settings.s3_region}.amazonaws.com/{s3_key}"
 

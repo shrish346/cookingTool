@@ -32,15 +32,17 @@ async def get_redis() -> redis.Redis:
 
 
 def get_s3_client():
-    """Get S3 client instance."""
+    """Get S3 client instance (AWS S3 or any S3-compatible provider)."""
     global _s3_client
     if _s3_client is None:
         settings = get_settings()
         _s3_client = boto3.client(
             's3',
-            aws_access_key_id=settings.aws_access_key_id,
-            aws_secret_access_key=settings.aws_secret_access_key,
-            region_name=settings.aws_region
+            aws_access_key_id=settings.s3_access_key_id,
+            aws_secret_access_key=settings.s3_secret_access_key,
+            region_name=settings.s3_region,
+            # None routes to real AWS; set it to target R2 instead.
+            endpoint_url=settings.s3_endpoint_url or None,
         )
     return _s3_client
 
