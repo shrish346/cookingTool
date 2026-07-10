@@ -99,7 +99,7 @@ def compress_video_for_api(
 class OpenRouterAdapter:
     """Adapter for OpenRouter's vision-language models."""
 
-    def __init__(self, model: str = "google/gemini-2.0-flash-001"):
+    def __init__(self, model: str = "google/gemini-2.5-flash"):
         self._model = model
         self._client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
