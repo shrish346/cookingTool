@@ -28,11 +28,11 @@ ENV PYTHONUNBUFFERED=1
 # Expose port
 EXPOSE 8000
 
-# Health check (uses Python's stdlib so no extra packages are needed;
-# the image has no curl installed)
+# Health check (Python stdlib; no curl in the image). Honors $PORT so it also
+# works where the platform injects a dynamic port (e.g. Railway).
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()" || exit 1
+    CMD python -c "import os,urllib.request; urllib.request.urlopen('http://localhost:%s/health' % os.environ.get('PORT','8000')).read()" || exit 1
 
-# Run the FastAPI server
-CMD ["uvicorn", "backend.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the FastAPI server. Shell form so ${PORT} expands; defaults to 8000 locally.
+CMD uvicorn backend.api.main:app --host 0.0.0.0 --port ${PORT:-8000}
 
