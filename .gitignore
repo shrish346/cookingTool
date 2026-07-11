@@ -47,6 +47,12 @@ htmlcov/
 *.gif
 *.webp
 
+# Frontend static assets (favicons, PWA icons, logo) must ship to Vercel —
+# re-include them despite the blanket image ignores above.
+!frontend/public/**/*.png
+!frontend/public/**/*.svg
+!frontend/public/**/*.ico
+
 # Temp / working directories
 downloads/
 output/
