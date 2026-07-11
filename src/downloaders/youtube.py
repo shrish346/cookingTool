@@ -1,9 +1,18 @@
 import yt_dlp
+import re
 import tempfile
 import os
 from pathlib import Path
 from typing import Optional
 from .base import VideoInfo, VideoDownloader, VideoMetadata
+
+
+# Cheap host/path check — does NOT hit the network. Whether the video actually
+# loads is decided later by get_info()/download(), which surface the real error.
+_YOUTUBE_URL_RE = re.compile(
+    r'(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/(?:watch\?v=|shorts/|embed/|live/)|youtu\.be/)',
+    re.IGNORECASE,
+)
 
 
 class YouTubeDownloader:
@@ -31,17 +40,14 @@ class YouTubeDownloader:
         return opts
 
     def supports(self, url: str) -> bool:
-        """Check if the URL is a supported YouTube URL."""
-        ydl_opts = self._get_ydl_opts()
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.extract_info(url, download=False)
-            return True
-        except Exception:
-            return False
-        finally:
-            if 'cookiefile' in ydl_opts:
-                Path(ydl_opts['cookiefile']).unlink(missing_ok=True)
+        """Whether this looks like a YouTube URL (pattern match only).
+
+        Deliberately does not hit the network: a network call here both made
+        validation slow (two fetches) and swallowed the real error, so callers
+        saw a misleading "unsupported platform". Reachability is checked by
+        get_info()/download(), which let the actual yt-dlp error propagate.
+        """
+        return bool(_YOUTUBE_URL_RE.search(url or ""))
 
     def download(self, url: str) -> VideoInfo:
         """Download a YouTube video and return VideoInfo."""
@@ -110,8 +116,6 @@ class YouTubeDownloader:
                     thumbnail_url=info.get('thumbnail'),
                     description=info.get('description'),
                 )
-        except Exception:
-            return None
         finally:
             if 'cookiefile' in ydl_opts:
                 Path(ydl_opts['cookiefile']).unlink(missing_ok=True)
