@@ -2,11 +2,15 @@
 API routes for the Chef's Loop backend.
 """
 import re
+import os
+import json
 import asyncio
+import tempfile
+from pathlib import Path
 from typing import Optional
 from enum import Enum
 
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request, Header
 from pydantic import BaseModel, Field, HttpUrl
 
 from backend.api.deps import get_cache_manager, CacheManager
@@ -109,30 +113,10 @@ def extract_video_id(url: str) -> tuple[VideoSource, Optional[str]]:
     return VideoSource.UNKNOWN, None
 
 
-async def deep_validate_url(url: str, source: VideoSource, video_id: str) -> tuple[bool, Optional[str]]:
-    """
-    Perform deep validation by checking if the video actually exists.
-    Returns (is_valid, error_message).
-    """
-    from src.downloaders.factory import get_downloader
-    from backend.api.config import get_settings
-    
-    settings = get_settings()
-    
-    try:
-        downloader = get_downloader(url, cookies=settings.youtube_cookies)
-        if downloader is None:
-            return False, "Unsupported video platform"
-        
-        # Try to get video info without downloading
-        # This validates the video exists and is accessible
-        info = await asyncio.to_thread(downloader.get_info, url)
-        if info is None:
-            return False, "Video not found or is private"
-        
-        return True, None
-    except Exception as e:
-        return False, str(e)
+# NOTE: deep (network) validation was removed. The cloud can't reach YouTube
+# from its datacenter IP; the residential download worker is what actually
+# fetches the video. So /validate is pattern-only and a video's real
+# reachability surfaces at process time (as a failed job with the yt-dlp error).
 
 
 # ============================================================================
@@ -157,17 +141,8 @@ async def validate_url(request: ValidateRequest):
             error="Invalid URL format. Please enter a valid YouTube or TikTok link."
         )
     
-    # Step 2: Deep validation (network call)
-    is_valid, error = await deep_validate_url(url, source, video_id)
-    
-    if not is_valid:
-        return ValidateResponse(
-            valid=False,
-            source=source,
-            video_id=video_id,
-            error=error or "Could not access video"
-        )
-    
+    # Reachability is confirmed later by the residential download worker (the
+    # cloud can't reach YouTube from its datacenter IP), so this is pattern-only.
     return ValidateResponse(
         valid=True,
         source=source,
@@ -282,104 +257,222 @@ async def get_status(
 
 
 # ============================================================================
+# Internal endpoints — used only by the residential download worker
+# ============================================================================
+
+DOWNLOAD_QUEUE_KEY = "dl:queue"
+
+
+class JobCompleteRequest(BaseModel):
+    video_id: str
+    ext: Optional[str] = "mp4"
+    title: Optional[str] = None
+    duration: Optional[int] = 0
+    description: Optional[str] = None
+    error: Optional[str] = None
+
+
+def _check_worker_auth(secret: Optional[str]):
+    settings = get_settings()
+    if not settings.downloader_secret or secret != settings.downloader_secret:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+@router.get("/internal/next-job")
+async def internal_next_job(x_downloader_secret: Optional[str] = Header(None)):
+    """The download worker polls this to claim the next pending job (or {})."""
+    _check_worker_auth(x_downloader_secret)
+    from backend.api.deps import get_redis
+    redis_client = await get_redis()
+    item = await redis_client.lpop(DOWNLOAD_QUEUE_KEY)
+    return json.loads(item) if item else {}
+
+
+@router.post("/internal/job-complete")
+async def internal_job_complete(
+    req: JobCompleteRequest,
+    x_downloader_secret: Optional[str] = Header(None),
+):
+    """The worker reports the raw video is in R2 (or that the download failed)."""
+    _check_worker_auth(x_downloader_secret)
+    from backend.api.deps import get_redis
+    redis_client = await get_redis()
+    if req.error:
+        await redis_client.set(f"job:{req.video_id}:source_error", req.error, ex=600)
+    else:
+        meta = {
+            "ext": req.ext or "mp4",
+            "title": req.title or "Unknown",
+            "duration": req.duration or 0,
+            "description": req.description,
+        }
+        await redis_client.set(f"job:{req.video_id}:source", json.dumps(meta), ex=600)
+    return {"ok": True}
+
+
+async def _await_source(redis_client, video_id: str, timeout: int) -> dict:
+    """Wait for the worker to upload the raw video and report back."""
+    waited = 0
+    interval = 3
+    while waited < timeout:
+        err = await redis_client.get(f"job:{video_id}:source_error")
+        if err:
+            raise RuntimeError(err)
+        meta = await redis_client.get(f"job:{video_id}:source")
+        if meta:
+            return json.loads(meta)
+        await asyncio.sleep(interval)
+        waited += interval
+    raise RuntimeError(
+        "Downloader offline — start your local download worker and try again."
+    )
+
+
+# ============================================================================
 # Background Pipeline Task
 # ============================================================================
 
 async def run_pipeline(url: str, video_id: str, source: VideoSource):
     """
     Background task that runs the full VLM → LLM → FFmpeg pipeline.
-    Updates Redis with progress for status polling.
+
+    The download step does NOT happen here — the cloud can't reach YouTube from
+    its datacenter IP. Instead we enqueue a download job, wait for the residential
+    worker to upload the raw video to R2, pull it back, and run the rest of the
+    pipeline as before. Updates Redis with progress for status polling.
     """
     from backend.api.deps import get_redis, get_cache_manager
-    from src.downloaders.factory import get_downloader
-    from src.processing.frames import FrameExtractor
     from src.processing.audio import AudioTranscriber
     from src.vlm.openrouter import OpenRouterAdapter
     from src.llm.openai import OpenAIAdapter
     from src.chef import RecipeChef
+    from src.downloaders.base import VideoInfo
     from backend.processors.video import VideoClipExtractor
-    
+
     redis_client = await get_redis()
     cache = await get_cache_manager()
     settings = get_settings()
-    
+
     async def update_status(status: str, progress: int, message: str):
         await redis_client.set(f"job:{video_id}:status", status, ex=3600)
         await redis_client.set(f"job:{video_id}:progress", str(progress), ex=3600)
         await redis_client.set(f"job:{video_id}:message", message, ex=3600)
-    
+
+    tmp_path: Optional[str] = None
+    source_key: Optional[str] = None
     try:
-        # Step 1: Download video
+        # Step 1: Hand the download off to the residential worker and wait for it.
         await update_status("downloading", 10, "Downloading video...")
-        
-        downloader = get_downloader(url, cookies=settings.youtube_cookies)
-        video_info = await asyncio.to_thread(downloader.download, url)
-        video_path = str(video_info.file_path)
-        try:
-            # Step 2: Transcribe audio
-            await update_status("analyzing", 25, "Transcribing audio...")
-            
-            transcriber = AudioTranscriber()
-            transcript = await asyncio.to_thread(transcriber.process_video, video_path)
-            
-            # Step 3: VLM + LLM pipeline (using direct video upload to Gemini)
-            await update_status("generating", 50, "Analyzing steps and generating recipe...")
-            
-            vlm_adapter = OpenRouterAdapter()  # Defaults to google/gemini-2.0-flash-001
-            llm_adapter = OpenAIAdapter()
-            
-            chef = RecipeChef(vlm_adapter=vlm_adapter, llm_adapter=llm_adapter)
-            # Use direct video upload (no frame extraction)
-            recipe = await asyncio.to_thread(
-                chef.generate_recipe_direct,
-                video_info,
-                video_path,
-                transcript
-            )
-            
-            # Add video metadata to recipe
-            recipe_dict = recipe.model_dump()
-            recipe_dict["video_id"] = video_id
-            recipe_dict["clips_ready"] = False
-            
-            # Save recipe (without clips)
-            await update_status("generating", 70, "Recipe generated! Preparing video clips...")
-            await cache.save_recipe(video_id, recipe_dict)
-            
-            # Step 5: Extract video clips
-            await update_status("extracting_clips", 80, "Extracting video segments...")
-            
-            clip_extractor = VideoClipExtractor(
-                s3_client=cache.s3,
-                bucket_name=settings.s3_bucket_name
-            )
-            
-            # Extract and upload clips for each step
-            updated_steps = await asyncio.to_thread(
-                clip_extractor.extract_and_upload_clips,
-                video_path=video_path,
-                video_id=video_id,
-                steps=recipe_dict["steps"]
-            )
-            
-            # Update recipe with clip URLs
-            recipe_dict["steps"] = updated_steps
-            recipe_dict["clips_ready"] = True
-            
-            await update_status("uploading", 95, "Uploading clips...")
-            await cache.save_recipe(video_id, recipe_dict)
-            
-            # Done!
-            await update_status("completed", 100, "Recipe ready!")
-            
-        finally:
-            # Cleanup downloaded video
-            await asyncio.to_thread(downloader.cleanup, video_info)
-    
+
+        # Clear any stale source signals from a previous run of this video.
+        await redis_client.delete(
+            f"job:{video_id}:source", f"job:{video_id}:source_error"
+        )
+        # Also clear a lingering error from a prior failed run (it isn't cleared
+        # elsewhere, so a re-run could surface a stale error).
+        await redis_client.delete(f"job:{video_id}:error")
+
+        await redis_client.rpush(
+            DOWNLOAD_QUEUE_KEY, json.dumps({"video_id": video_id, "url": url})
+        )
+        meta = await _await_source(redis_client, video_id, settings.download_wait_timeout)
+
+        # Pull the raw video the worker uploaded to R2 down to a local tempfile.
+        ext = meta.get("ext") or "mp4"
+        source_key = f"{video_id}/source.{ext}"
+        fd, tmp_path = tempfile.mkstemp(suffix=f".{ext}")
+        os.close(fd)
+        await asyncio.to_thread(
+            cache.s3.download_file,
+            settings.s3_bucket_name,
+            source_key,
+            tmp_path,
+        )
+
+        video_info = VideoInfo(
+            title=meta.get("title") or "Unknown",
+            file_path=Path(tmp_path),
+            url=url,
+            duration_seconds=meta.get("duration") or 0,
+            description=meta.get("description"),
+        )
+        video_path = tmp_path
+
+        # Step 2: Transcribe audio
+        await update_status("analyzing", 25, "Transcribing audio...")
+
+        transcriber = AudioTranscriber()
+        transcript = await asyncio.to_thread(transcriber.process_video, video_path)
+
+        # Step 3: VLM + LLM pipeline (using direct video upload to Gemini)
+        await update_status("generating", 50, "Analyzing steps and generating recipe...")
+
+        vlm_adapter = OpenRouterAdapter()  # Defaults to google/gemini-2.5-flash
+        llm_adapter = OpenAIAdapter()
+
+        chef = RecipeChef(vlm_adapter=vlm_adapter, llm_adapter=llm_adapter)
+        # Use direct video upload (no frame extraction)
+        recipe = await asyncio.to_thread(
+            chef.generate_recipe_direct,
+            video_info,
+            video_path,
+            transcript
+        )
+
+        # Add video metadata to recipe
+        recipe_dict = recipe.model_dump()
+        recipe_dict["video_id"] = video_id
+        recipe_dict["clips_ready"] = False
+
+        # Save recipe (without clips)
+        await update_status("generating", 70, "Recipe generated! Preparing video clips...")
+        await cache.save_recipe(video_id, recipe_dict)
+
+        # Step 5: Extract video clips
+        await update_status("extracting_clips", 80, "Extracting video segments...")
+
+        clip_extractor = VideoClipExtractor(
+            s3_client=cache.s3,
+            bucket_name=settings.s3_bucket_name
+        )
+
+        # Extract and upload clips for each step
+        updated_steps = await asyncio.to_thread(
+            clip_extractor.extract_and_upload_clips,
+            video_path=video_path,
+            video_id=video_id,
+            steps=recipe_dict["steps"]
+        )
+
+        # Update recipe with clip URLs
+        recipe_dict["steps"] = updated_steps
+        recipe_dict["clips_ready"] = True
+
+        await update_status("uploading", 95, "Uploading clips...")
+        await cache.save_recipe(video_id, recipe_dict)
+
+        # Done!
+        await update_status("completed", 100, "Recipe ready!")
+
     except Exception as e:
         # Rollback on failure
         await cache.delete_recipe(video_id)
         await redis_client.set(f"job:{video_id}:status", "failed", ex=3600)
         await redis_client.set(f"job:{video_id}:error", str(e), ex=3600)
         await redis_client.set(f"job:{video_id}:message", "Failed to generate recipe", ex=3600)
+
+    finally:
+        # Clean up the local tempfile and the raw source object in R2 — the
+        # source video is only needed for the duration of this pipeline run.
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        if source_key:
+            try:
+                await asyncio.to_thread(
+                    cache.s3.delete_object,
+                    Bucket=settings.s3_bucket_name,
+                    Key=source_key,
+                )
+            except Exception:
+                pass
 

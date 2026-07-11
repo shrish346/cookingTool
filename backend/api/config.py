@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     # YouTube Cookies
     youtube_cookies: str = ""
 
+    # Residential download worker
+    # Shared secret authenticating the home worker's /internal/* calls.
+    downloader_secret: str = ""
+    # How long the pipeline waits for the worker to upload the raw video
+    # before failing the job with "Downloader offline".
+    download_wait_timeout: int = 300
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
