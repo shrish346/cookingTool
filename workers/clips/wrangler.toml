@@ -1,0 +1,9 @@
+name = "makerai-clips"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+# Serves objects straight out of the clips bucket via a binding, which is not
+# subject to the r2.dev public-URL rate limit.
+[[r2_buckets]]
+binding = "CLIPS"
+bucket_name = "maker-ai-clips"
