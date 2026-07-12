@@ -20,9 +20,43 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
   const totalSteps = recipe.steps.length
   const hasVideo = Boolean(step?.video_clip_url)
 
-  // Get next/prev step URLs for preloading
-  const nextVideoUrl = recipe.steps[currentStep + 1]?.video_clip_url
-  const prevVideoUrl = recipe.steps[currentStep - 1]?.video_clip_url
+  // Clips adjacent to the current step, warmed ahead of time. Two forward (the
+  // common direction) and one back.
+  const adjacentUrls = [
+    recipe.steps[currentStep + 1]?.video_clip_url,
+    recipe.steps[currentStep + 2]?.video_clip_url,
+    recipe.steps[currentStep - 1]?.video_clip_url,
+  ].filter((url): url is string => Boolean(url))
+
+  // Warm the browser's HTTP cache for those clips.
+  //
+  // This used to be hidden <video preload="auto"> elements, which did nothing on
+  // a phone: iOS Safari ignores `preload` on video and refuses to fetch media
+  // bytes until the user actually plays it, and `display: none` suppresses
+  // preloading in other browsers too. So every clip was really loading on demand
+  // — the blank-video stall.
+  //
+  // Fetching the bytes ourselves is a plain HTTP GET, which iOS does honor. The
+  // response lands in the HTTP cache (clips are uploaded `immutable`, 1y max-age),
+  // so the later <video src> resolves from cache instead of the network.
+  const prefetched = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    for (const url of adjacentUrls) {
+      if (prefetched.current.has(url)) continue
+      prefetched.current.add(url)
+
+      // Deliberately not aborted on cleanup: stepping forward re-runs this
+      // effect, and the in-flight fetch is usually the clip about to be needed.
+      fetch(url, { cache: 'force-cache' })
+        .then((res) => res.arrayBuffer()) // drain so the body is fully cached
+        .catch(() => {
+          // Prefetch is best-effort; the <video> will still load on demand.
+          prefetched.current.delete(url)
+        })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adjacentUrls.join(',')])
 
   // Handle tap navigation
   const handleTap = (e: React.MouseEvent) => {
@@ -50,12 +84,6 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
 
   return (
     <RotateOverlay>
-      {/* Hidden preloading videos */}
-      <div className="hidden" aria-hidden="true">
-        {nextVideoUrl && <video src={nextVideoUrl} preload="auto" muted />}
-        {prevVideoUrl && <video src={prevVideoUrl} preload="auto" muted />}
-      </div>
-
       <div
         className="cooking-mode flex"
         onClick={handleTap}
@@ -118,6 +146,7 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
                 muted
                 autoPlay
                 playsInline
+                preload="auto"
                 className="w-full h-full object-cover"
               />
             ) : (

@@ -41,6 +41,10 @@ export default defineConfig({
     ],
     server: {
         port: 5173,
-        host: true
+        host: true,
+        // Permit cloudflared quick-tunnel hosts (dev-tunnel.sh). Leading dot = any
+        // subdomain. Localhost and LAN IPs are allowed by default, so this only
+        // matters when serving through a tunnel; harmless otherwise.
+        allowedHosts: ['.trycloudflare.com']
     }
 });

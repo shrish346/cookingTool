@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-MakerAI (internally "Chef's Loop") turns cooking short-form videos (YouTube Shorts, TikTok, Reels) into interactive step-by-step recipes, where each step is backed by a looping video clip cut from the source video. The core problem the code solves is *temporal grounding*: mapping each written recipe step back to the exact seconds of video it came from.
+MakerAI turns cooking short-form videos (YouTube Shorts, TikTok, Reels) into interactive step-by-step recipes, where each step is backed by a looping video clip cut from the source video. The core problem the code solves is _temporal grounding_: mapping each written recipe step back to the exact seconds of video it came from.
 
 ## Commands
 
@@ -32,6 +32,20 @@ npm run lint     # eslint
 ```bash
 docker-compose up --build   # backend :8000, frontend :5173, redis :6379
 ```
+
+### Phone testing
+
+Two helper scripts start Redis + backend (bound to `0.0.0.0`) + frontend with `VITE_API_URL` wired to the right host. `VITE_API_URL` is baked in when the Vite dev server starts, so it must point at a host the phone can reach — this is what the scripts handle.
+
+```bash
+./dev-lan.sh      # phone on same WiFi; auto-detects LAN IP, serves http://<ip>:5173
+./dev-tunnel.sh   # public https via cloudflared; needed for real PWA install/offline testing
+```
+
+- `dev-lan.sh` is plain http on a LAN IP, which is **not** a secure context, so the PWA service worker won't register on the phone. Fine for UI/recipe flow; not for PWA install. Override the detected IP with `LAN_IP_OVERRIDE=192.168.x.x ./dev-lan.sh`.
+- `dev-tunnel.sh` opens **two** cloudflared tunnels (frontend + backend) — an https page can't call an http backend, so the backend tunnel URL is captured first and fed into `VITE_API_URL`. Requires `cloudflared` (`brew install cloudflared`).
+- Both scripts clean up child processes and the Redis container on Ctrl-C.
+- If the phone can't connect over LAN, it's usually the macOS firewall blocking incoming connections for python/node.
 
 ### Tests
 
@@ -81,7 +95,7 @@ Providers: OpenRouter (VLM + LLM), OpenAI, Gemini. `src/downloaders/factory.py` 
 
 `CacheManager` (`backend/api/deps.py`) is two-tier: Redis (1h TTL) in front of S3 (`{video_id}/recipe.json`, `{video_id}/clips/*`). A hit counter re-runs the whole pipeline every `CACHE_REFRESH_THRESHOLD` (default 5) hits. On pipeline failure the recipe is deleted from both tiers to avoid serving a half-built recipe.
 
-The recipe is saved to cache *twice*: once after the LLM stage with `clips_ready: false`, again after clips upload with `clips_ready: true`. The frontend renders the recipe text while clips are still rendering, so don't collapse these into one write.
+The recipe is saved to cache _twice_: once after the LLM stage with `clips_ready: false`, again after clips upload with `clips_ready: true`. The frontend renders the recipe text while clips are still rendering, so don't collapse these into one write.
 
 ### Frontend
 
