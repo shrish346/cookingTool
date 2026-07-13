@@ -8,7 +8,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 from ..downloaders.base import VideoInfo
-from ..schemas import Recipe, SceneLog, compute_frame_indices_from_micro_actions, compute_timestamps_from_micro_actions
+from ..schemas import Recipe, SceneLog, Tool, compute_frame_indices_from_micro_actions, compute_timestamps_from_micro_actions
 
 load_dotenv()
 
@@ -56,7 +56,8 @@ class OpenAIAdapter:
         
         content = response.choices[0].message.content
         recipe = self._parse_response(content, video_info)
-        
+        recipe = self._seed_tools_from_scene_log(recipe, scene_log)
+
         # Post-process: compute video clip timing from micro_action_ids
         if use_timestamps:
             # Try timestamp-based first, fall back to frame-based
@@ -94,7 +95,12 @@ Use the transcript to cross-reference ingredient amounts, clarify steps, and add
         # Format micro-actions timeline (with timestamps if available)
         micro_actions_text = self._format_micro_actions(scene_log, use_timestamps)
 
-        return f"""You are a professional chef and video editor analyzing a cooking video to create a structured recipe.
+        return f"""You are a forensic video analyst building a factual record of what a cooking video showed.
+
+This is the GROUNDING pass. Your ONLY job is fidelity: report what the camera saw, grouped into
+coherent chunks, and map each chunk back to the exact micro-actions it came from. A later pass will
+turn this into a teachable recipe - so do NOT pad, explain, teach, or invent anything here. If the
+video didn't show it, it does not belong in your output.
 
 INPUT DATA:
 Video Title: {video_info.title}
@@ -108,27 +114,32 @@ SCENE ANALYSIS:
 {scene_text}
 
 MICRO-ACTIONS TIMELINE:
-(Format: ID | Timestamp | Action Description. Note: Some actions may end with a [PREVIEW] tag.)
+(Format: ID | Timestamp | Duration | Action | Entity | State Change)
 {micro_actions_text}
 
 YOUR TASK:
-1. Build a complete ingredient list.
-2. Group micro-actions into logical, CHRONOLOGICAL recipe steps.
-3. Ensure steps align with the video flow for accurate clip extraction.
+1. Identify the dish, and write a short search query for it (`dish_query`) - the next pass uses this
+   to look up published recipes for the same dish.
+2. List the ingredients the video actually shows, with whatever amounts are visible or stated.
+3. List the tools and appliances the video actually shows.
+4. Group the micro-actions into logical, CHRONOLOGICAL steps.
 
-[NEW] GROUPING RULES (CRITICAL):
-1. **The Preview Filter (CRITICAL):** Scan the micro-actions for the `[PREVIEW]` tag. These represent the finished dish shown at the start of the video. **Do NOT include these IDs in any recipe step.** The recipe must start at the first micro-action *without* a preview tag.
-2. **Temporal Contiguity is King:** Only group micro-actions that happen closely together in time.
-3. **The "Set Aside" Rule:** If an ingredient is handled (e.g., "sear chicken"), then set aside while other things happen, and then handled again later, THESE MUST BE TWO SEPARATE STEPS. Do not merge them.
-4. **Linear Flow:** Step 1 must happen before Step 2.
-5. **Clip Tightness:** A step's duration is defined by the start of its first micro-action and the end of its last.
+GROUPING RULES:
+1. **Temporal Contiguity is King:** Only group micro-actions that happen closely together in time.
+2. **The "Set Aside" Rule:** If an ingredient is handled (e.g., "sear chicken"), set aside while other
+   things happen, then handled again later, THESE MUST BE TWO SEPARATE STEPS. Do not merge them.
+3. **Linear Flow:** Step 1 must happen before Step 2.
+4. **Clip Tightness:** A step's span is the start of its first micro-action to the end of its last.
+5. **Every step must cite micro_action_ids.** A step with no video actions behind it does not belong
+   in this pass.
 
 OUTPUT FORMAT:
 Return a valid JSON object with this exact structure:
 
 {{
-    "reasoning": "Briefly explain how you handled the timeline, specifically where you determined the preview ended and cooking began.",
+    "reasoning": "Briefly explain how you grouped the timeline.",
     "title": "Recipe name",
+    "dish_query": "mushroom and egg quesadilla",
     "description": "Brief description",
     "servings": 4,
     "prep_time_minutes": 15,
@@ -138,28 +149,49 @@ Return a valid JSON object with this exact structure:
     "ingredients": [
         {{"name": "ingredient", "quantity": 2.0, "unit": "cups", "preparation": "diced"}}
     ],
+    "tools": [
+        {{"name": "Nonstick skillet"}}
+    ],
     "steps": [
         {{
             "order": 1,
             "title": "Action Verb + Noun (e.g., 'Sear the Chicken')",
-            "instruction": "Detailed instruction for the user.",
+            "instruction": "What the video shows happening, plainly stated.",
             "duration_minutes": 5,
-            "tips": ["optional tip"],
-            "micro_action_ids": [3, 4, 5], 
-            "has_video_clip": true
+            "micro_action_ids": [3, 4, 5]
         }}
     ],
     "nutrition_estimates": {{ "calories": 450, "protein": 25, "carbs": 50, "fats": 15 }}
 }}
 
 CONSTRAINTS:
-- **Ingredients:** "quantity" must be a number (use 0 if negligible/to taste). "unit" is required (use "count" or "to taste" if unclear).
-- **Steps:** "micro_action_ids" must be a list of integers from the timeline. **Ensure NO IDs marked with [PREVIEW] are included.**
-- **Video Clips:** If a step is purely instructional (e.g., "Preheat oven to 350") and has no visual action in the timeline, set "has_video_clip": false and "micro_action_ids": [].
+- **Ingredients:** "quantity" must be a positive number. "unit" is required (use "count" or "to taste"
+  if unclear). Report amounts as shown - do NOT substitute a standard amount for a vague one.
+- **Tools:** Only what is visible on camera. The next pass adds the ones the video cut away from.
+- **Steps:** "micro_action_ids" must be a list of integers from the timeline above.
 - **Noise:** Ignore micro-actions labeled "no relevant cooking action".
 
 Return ONLY the JSON object.
 """
+
+    def _seed_tools_from_scene_log(self, recipe: Recipe, scene_log: SceneLog) -> Recipe:
+        """Add any tool/appliance the VLM saw that the LLM left off its tools list.
+
+        The VLM already labels entities as ingredient/tool/appliance, and until now that
+        classification was only ever printed into a prompt and thrown away.
+        """
+        known = {tool.name.strip().lower() for tool in recipe.tools}
+
+        for scene in scene_log.scenes:
+            for entity in scene.entities:
+                if entity.type not in ("tool", "appliance"):
+                    continue
+                if entity.name.strip().lower() in known:
+                    continue
+                known.add(entity.name.strip().lower())
+                recipe.tools.append(Tool(name=entity.name, provenance="video"))
+
+        return recipe
 
     def _format_scene_log(self, scene_log: SceneLog) -> str:
         """Format scene log into readable text for the prompt."""
@@ -199,22 +231,22 @@ Return ONLY the JSON object.
         has_timestamps = any(a.timestamp_seconds is not None for a in all_actions)
         
         if has_timestamps and use_timestamps:
-            lines = ["ID  | Timestamp | Duration | Action                        | Entity      | State Change"]
-            lines.append("-" * 95)
-            
+            lines = ["ID  | Timestamp | Duration | Action                                                       | Entity       | State Change"]
+            lines.append("-" * 125)
+
             for action in all_actions:
                 state_change = ""
                 if action.state_before and action.state_after:
                     state_change = f"{action.state_before} → {action.state_after}"
                 elif action.state_after:
                     state_change = f"→ {action.state_after}"
-                
+
                 entity = action.entity or ""
                 ts = f"{action.timestamp_seconds:.1f}s" if action.timestamp_seconds is not None else "?"
                 duration = f"{action.duration_seconds:.1f}s" if action.duration_seconds else "-"
-                
+
                 lines.append(
-                    f"{action.id:3} | {ts:>9} | {duration:>8} | {action.action[:30]:<30} | {entity[:12]:<12} | {state_change}"
+                    f"{action.id:3} | {ts:>9} | {duration:>8} | {action.action[:60]:<60} | {entity[:12]:<12} | {state_change}"
                 )
         else:
             # Legacy frame-based format
@@ -265,6 +297,8 @@ Return ONLY the JSON object.
             data["ingredients"] = []
         if not isinstance(data.get("steps"), list):
             data["steps"] = []
+        if not isinstance(data.get("tools"), list):
+            data["tools"] = []
         
         # Handle potential nested nutrition object
         if "nutrition_estimates" in data:
