@@ -10,6 +10,22 @@ from pathlib import Path
 from backend.api.config import get_settings
 
 
+def _first_set(step: dict, *keys: str):
+    """First key present with a non-None value. Unlike `or`, a real 0.0 survives."""
+    for key in keys:
+        if step.get(key) is not None:
+            return step[key]
+    return None
+
+
+def _without_clip(step: dict) -> dict:
+    """Mark a step as text-only, so the UI stops waiting on a clip that isn't coming."""
+    demoted = step.copy()
+    demoted["has_video_clip"] = False
+    demoted["video_clip_url"] = None
+    return demoted
+
+
 class VideoClipExtractor:
     """
     Extracts video clips for each recipe step using FFmpeg.
@@ -56,17 +72,18 @@ class VideoClipExtractor:
                     updated_steps.append(step)
                     continue
                 
-                # Timing Logic (Timestamp only)
-                start_time = step.get("start_timestamp_seconds") or step.get("start_timestamp")
-                end_time = step.get("end_timestamp_seconds") or step.get("end_timestamp")
-                
+                # Timing Logic (Timestamp only). Check for None explicitly - a step that
+                # legitimately starts at 0.0s is falsy, and `or` would discard it.
+                start_time = _first_set(step, "start_timestamp_seconds", "start_timestamp")
+                end_time = _first_set(step, "end_timestamp_seconds", "end_timestamp")
+
                 if start_time is not None and end_time is not None:
                     start_time = float(start_time)
                     end_time = float(end_time)
                     print(f"  Timing: {start_time:.2f}s → {end_time:.2f}s")
                 else:
                     print(f"  ⏭  Skipping - no timestamp timing data found\n")
-                    updated_steps.append(step)
+                    updated_steps.append(_without_clip(step))
                     continue
 
                 # Micro-actions for context
@@ -93,32 +110,36 @@ class VideoClipExtractor:
                 
                 print(f"  Extracting: {start_time:.2f}s → {start_time + duration:.2f}s (duration: {duration:.1f}s)")
                 
-                # Extraction & Upload
-                clip_filename = f"step_{step_order}.mp4"
+                # Extraction & Upload. Clips are keyed by the step's stable ID, not its
+                # order, so inserting or reordering steps can never collide with or
+                # orphan a previously uploaded clip.
+                clip_filename = f"{step.get('id') or f'step_{step_order}'}.mp4"
                 clip_path = os.path.join(temp_dir, clip_filename)
-                
+
                 success = self._extract_clip(
                     video_path=video_path,
                     output_path=clip_path,
                     start_time=start_time,
                     duration=duration
                 )
-                
+
                 if success and os.path.exists(clip_path):
-                    s3_key = f"{video_id}/{clip_filename}"
+                    s3_key = f"{video_id}/clips/{clip_filename}"
                     try:
                         clip_url = self._upload_to_s3(clip_path, s3_key)
                         print(f"  ✓ Uploaded: {s3_key}\n")
-                        
+
                         step_copy = step.copy()
                         step_copy["video_clip_url"] = clip_url
                         updated_steps.append(step_copy)
                     except Exception as e:
+                        # Leave has_video_clip set and the frontend waits forever on a
+                        # clip that will never arrive. Demote it to a text step instead.
                         print(f"  ✗ S3 upload failed: {e}\n")
-                        updated_steps.append(step)
+                        updated_steps.append(_without_clip(step))
                 else:
                     print(f"  ✗ FFmpeg extraction failed\n")
-                    updated_steps.append(step)
+                    updated_steps.append(_without_clip(step))
         
         print("="*70)
         print(f"[ClipExtractor] Completed: {len([s for s in updated_steps if s.get('video_clip_url')])} clips uploaded")
