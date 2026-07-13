@@ -60,20 +60,36 @@ Requires a populated `.env` (copy from `env.example`) and `ffmpeg` on PATH. Thes
 
 ## Architecture
 
-### Two-stage pipeline
+### The pipeline
 
 The central abstraction is `RecipeChef` (`src/chef.py`), which orchestrates:
 
 1. **VLM stage** — a vision model watches the video and emits a `SceneLog`: a list of `MicroAction`s, each an atomic cooking action ("add salt", "flip chicken") stamped with `timestamp_seconds` and an integer `id`.
-2. **LLM stage** — a text model reads the `SceneLog` and emits a `Recipe`, where each `Step` cites the `micro_action_ids` it was derived from.
+2. **Grounding pass (pass 1)** — `src/llm/openai.py` (gpt-4o) reads the `SceneLog` and emits a `Recipe`, where each `Step` cites the `micro_action_ids` it was derived from. **This pass is about fidelity only** — it reports what the camera saw and invents nothing.
 3. **Deterministic mapping** — `compute_timestamps_from_micro_actions()` in `src/schemas.py` resolves those IDs back into `start_timestamp_seconds` / `end_timestamp_seconds` on each step. The LLM never invents timestamps directly; it only cites IDs, and the code derives the timing. This is the key design decision — preserve it.
-4. **Clip extraction** — `backend/processors/video.py` runs FFmpeg per step and uploads clips to S3, writing `video_clip_url` back onto each step.
+4. **Expansion pass (pass 2)** — `src/llm/expander.py` takes the grounded skeleton and rewrites it for a cook who has never cooked before: filling in quantities the video never stated, adding a `doneness_cue` to every step, and **inserting new steps the video never showed** (prep it skipped, technique it never taught). Runs on OpenRouter with the `:online` suffix, so it can pull real quantities from published recipes and cite them in `Recipe.sources`.
+5. **Assembly** — `src/recipe_assembly.py`. `merge_expansion()` re-attaches the frozen timing, `build_gather_steps()` synthesizes the two setup steps, `relink_steps()` renumbers.
+6. **Clip extraction** — `backend/processors/video.py` runs FFmpeg per step and uploads clips to S3, writing `video_clip_url` back onto each step. Clips are keyed by `step.id`, **not** `order`, so inserting or reordering steps can't collide with or orphan a clip.
+
+**How grounding survives pass 2 — do not break this.** Pass 2 is never shown a timestamp and never writes one. It echoes back the `grounded_step_id` of the step it derived from (or `null` for a step it invented), and `merge_expansion()` copies the frozen `micro_action_ids` / timestamps back on by ID, stripping anything the model tried to set. The model *cannot* drift the timing because it never gets the opportunity to write it. `has_video_clip` is likewise derived in code, never trusted from the model.
+
+If pass 2 throws, returns bad JSON, or drops >30% of the grounded steps, `RecipeChef._expand_for_beginner` logs it and returns the pass-1 recipe with `expansion_failed: true`. Worst case is the old, un-expanded output — never a broken request.
+
+**The expanded recipe is the only recipe ever cached or served.** Pass 2 runs inside `generate_recipe_direct()`, which returns before `run_pipeline`'s first `cache.save_recipe()`. The grounded skeleton is an intermediate value; don't move pass 2 out of the chef or you'll start caching it.
 
 `RecipeChef` exposes three entry points, in order of preference:
 
-- `generate_recipe_direct()` — **the one in production use.** Compresses the video (`compress_video_for_api` in `src/vlm/openrouter.py`) and uploads it whole to a video-capable VLM (Gemini via OpenRouter). Most accurate temporal grounding.
-- `generate_recipe_with_timestamps()` — dense frame extraction with timestamps.
+- `generate_recipe_direct()` — **the one in production use.** Compresses the video (`compress_video_for_api` in `src/vlm/openrouter.py`) and uploads it whole to a video-capable VLM (Gemini via OpenRouter). Most accurate temporal grounding. Pass `expand=False` to get the raw grounded recipe, which is useful for diffing what expansion actually changed.
+- `generate_recipe_with_timestamps()` — dense frame extraction with timestamps. **Does not run pass 2.**
 - `generate_recipe()` — legacy frame-chunk path. **Stale: it calls `analyze_video_direct()` with a frame list, but that method's signature takes a video path.** It will break if called. `main.py` still routes to it.
+
+### Recipe schema and provenance
+
+`Recipe` (`src/schemas.py`) carries a `schema_version`; bump it when the shape changes incompatibly, and bump `RECIPE_SCHEMA_VERSION` in `frontend/src/hooks/useLocalStorage.ts` to match. `CacheManager.get_cached_recipe` treats a version mismatch as a miss — without that, S3 recipes (which have no TTL) would be served forever in an old shape.
+
+Ingredients, tools and steps each carry a `provenance`: `video` (the camera showed it), `reference` (from a published recipe, cites `source_id` into `Recipe.sources`), or `model` (the model's estimate). The frontend surfaces this on the ingredients list — it's the trust surface for everything pass 2 invents, so don't drop it when touching that view.
+
+Steps reference ingredients and tools by ID (`ingredient_ids`, `tool_ids`) rather than only naming them in prose. That's deliberate groundwork for recipe mutation: "swap chicken for tofu" should become a patch to the ingredient entity plus a regeneration of only the steps referencing it. `Step.depends_on` is a linear chain today and read by nothing — it's the seam a real DAG grows from.
 
 ### Adapters
 
