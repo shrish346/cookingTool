@@ -12,6 +12,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from backend.api.config import get_settings
+from src.schemas import SCHEMA_VERSION
 
 
 # Global client instances
@@ -80,13 +81,13 @@ class CacheManager:
     async def get_cached_recipe(self, video_id: str) -> Optional[dict]:
         """
         Try to get cached recipe from Redis first, then S3.
-        Returns None if not found.
+        Returns None if not found, or if the cached recipe predates the current schema.
         """
         # Try Redis first (fastest)
         cached = await self.redis.get(f"recipe:{video_id}")
         if cached:
-            return json.loads(cached)
-        
+            return self._if_current(video_id, json.loads(cached))
+
         # Try S3 (persistent storage)
         try:
             response = self.s3.get_object(
@@ -94,29 +95,46 @@ class CacheManager:
                 Key=f"{video_id}/recipe.json"
             )
             recipe_data = json.loads(response['Body'].read().decode('utf-8'))
-            # Cache in Redis for future requests
-            await self.redis.set(
-                f"recipe:{video_id}",
-                json.dumps(recipe_data),
-                ex=3600  # 1 hour TTL
-            )
-            return recipe_data
         except ClientError as e:
             if e.response['Error']['Code'] == 'NoSuchKey':
                 return None
             raise
-    
+
+        if self._if_current(video_id, recipe_data) is None:
+            return None
+
+        # Cache in Redis for future requests
+        await self.redis.set(
+            f"recipe:{video_id}",
+            json.dumps(recipe_data),
+            ex=3600  # 1 hour TTL
+        )
+        return recipe_data
+
+    def _if_current(self, video_id: str, recipe_data: dict) -> Optional[dict]:
+        """Treat a recipe from an older schema as a miss, so it gets regenerated.
+
+        S3 recipes have no TTL, so without this an old-shape recipe.json would be
+        served verbatim forever - missing every field the frontend now expects.
+        """
+        version = recipe_data.get("schema_version", 1)
+        if version != SCHEMA_VERSION:
+            print(f"[Cache] {video_id}: schema v{version} != v{SCHEMA_VERSION}, regenerating")
+            return None
+        return recipe_data
+
     async def save_recipe(self, video_id: str, recipe_data: dict):
         """Save recipe to both Redis and S3."""
+        recipe_data = {**recipe_data, "schema_version": SCHEMA_VERSION}
         recipe_json = json.dumps(recipe_data, indent=2)
-        
+
         # Save to Redis
         await self.redis.set(
             f"recipe:{video_id}",
             recipe_json,
             ex=3600  # 1 hour TTL
         )
-        
+
         # Save to S3
         self.s3.put_object(
             Bucket=self.settings.s3_bucket_name,
