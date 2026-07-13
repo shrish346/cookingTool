@@ -95,7 +95,11 @@ Steps reference ingredients and tools by ID (`ingredient_ids`, `tool_ids`) rathe
 
 `src/vlm/` and `src/llm/` define `Protocol` interfaces (`VLMAdapter`, `LLMAdapter`) with concrete adapters alongside. The protocols have drifted from the implementations — `LLMAdapter.generate_recipe` doesn't declare the `use_timestamps` kwarg every caller passes, and `analyze_video_with_timestamps` isn't in `VLMAdapter` at all. Treat the concrete adapters as the source of truth, and prefer fixing the protocol over working around it.
 
-Providers: OpenRouter (VLM + LLM), OpenAI, Gemini. `src/downloaders/factory.py` picks a downloader by URL; only YouTube is wired up (TikTok is commented out, despite the API validating TikTok URLs).
+Providers: OpenRouter (VLM + LLM), OpenAI, Gemini.
+
+`src/downloaders/factory.py` picks a downloader by URL. YouTube, TikTok and Instagram are all wired up and share `YtDlpDownloader` (`src/downloaders/ytdlp.py`) — a subclass is just a URL regex, a yt-dlp format selector, the names of its cookie/proxy env vars, and an optional `explain_error` hook that rewrites a known yt-dlp failure into something the operator can act on. Add a platform by subclassing it, not by copying the download loop. Each downloader reads its own cookie env var, so callers should call `get_downloader(url)` and let it; the `cookies=` kwarg is an explicit override for whichever downloader matches.
+
+`extract_video_id()` (`backend/api/routes.py`) namespaces every non-YouTube ID (`tt-`, `ig-`). This is load-bearing, not cosmetic: the ID is the *only* cache key — Redis job keys, the S3 `{id}/` prefix, and the public `job_id` — and an Instagram shortcode is 11 chars of the same alphabet as a YouTube ID, so bare IDs could collide across platforms and serve one video's recipe for another's. YouTube stays un-prefixed so recipes already cached under a plain ID keep hitting.
 
 ### API surface
 
@@ -121,7 +125,9 @@ Vite + React + TypeScript + Tailwind, PWA via `vite-plugin-pwa`. Single-file sta
 
 - `docker-compose.yml` hardcodes `VITE_API_URL` to a LAN IP (`http://10.71.118.71:8000`) so phones on the same network can reach the PWA. Change it for your machine; don't assume `localhost` works.
 - CORS is `allow_origins=["*"]` — dev-only, needs tightening before any real deploy.
-- YouTube blocks datacenter IPs. `YOUTUBE_COOKIES` (a Netscape cookie file, passed through `get_downloader(url, cookies=...)`) exists to work around this.
+- YouTube blocks datacenter IPs. `YOUTUBE_COOKIES` (a Netscape cookie file, read by `YouTubeDownloader`) exists to work around this.
+- **Instagram Reels need `INSTAGRAM_COOKIES` to work at all.** Instagram answers a logged-out request with an "empty media response" for most Reels, so yt-dlp gets nothing without a signed-in session cookie file on the worker. Use a throwaway account — sustained automated fetching can get a session rate-limited. `InstagramDownloader.explain_error` turns that empty response into a message naming the cookie fix.
+- **TikTok is unreachable from an Indian ISP** — it's banned there, `www.tiktok.com` DNS-resolves to a block address and the TLS handshake is refused, so yt-dlp fails before it loads a page. The download worker runs on a residential line, so it inherits whatever its ISP blocks. `TIKTOK_PROXY` (a proxy URL, TikTok-only) is the way through; without it, `TikTokDownloader.explain_error` turns the raw SSL error into a message that says so. TikTok's *code path* is verified; an actual TikTok download has never been run from this machine's network.
 - Frames are passed between stages as base64 JPEG strings, not file paths.
 - `frames/` and `monitoring/` are scratch/disabled artifacts, not live code. Prometheus/Grafana are commented out in `docker-compose.yml` and would need `prometheus-fastapi-instrumentator` wired into `backend/api/main.py` to have anything to scrape.
 - `BETA_LAUNCH.md` is stale and does not describe current behavior.

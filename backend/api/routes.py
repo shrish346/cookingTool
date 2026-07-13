@@ -27,11 +27,12 @@ router = APIRouter()
 class VideoSource(str, Enum):
     YOUTUBE = "youtube"
     TIKTOK = "tiktok"
+    INSTAGRAM = "instagram"
     UNKNOWN = "unknown"
 
 
 class ValidateRequest(BaseModel):
-    url: str = Field(..., description="YouTube or TikTok URL to validate")
+    url: str = Field(..., description="YouTube, TikTok or Instagram URL to validate")
 
 
 class ValidateResponse(BaseModel):
@@ -42,7 +43,7 @@ class ValidateResponse(BaseModel):
 
 
 class ProcessRequest(BaseModel):
-    url: str = Field(..., description="YouTube or TikTok URL to process")
+    url: str = Field(..., description="YouTube, TikTok or Instagram URL to process")
 
 
 class ProcessResponse(BaseModel):
@@ -85,31 +86,50 @@ YOUTUBE_PATTERNS = [
     r'(?:https?://)?(?:www\.)?youtube\.com/embed/([a-zA-Z0-9_-]{11})',
 ]
 
-# TikTok patterns
+# TikTok patterns. The short-link forms must not be written as a bare
+# `tiktok.com/(\w+)` — that matches the literal "t" in a /t/CODE link and every
+# such video would then share the cache key "t". Each form is matched exactly.
 TIKTOK_PATTERNS = [
-    r'(?:https?://)?(?:www\.)?tiktok\.com/@[\w.-]+/video/(\d+)',
-    r'(?:https?://)?(?:vm\.)?tiktok\.com/(\w+)',
-    r'(?:https?://)?(?:www\.)?tiktok\.com/t/(\w+)',
+    r'(?:https?://)?(?:www\.|m\.)?tiktok\.com/@[\w.-]+/video/(\d+)',
+    r'(?:https?://)?(?:www\.)?tiktok\.com/t/([\w-]+)',
+    r'(?:https?://)?(?:vm|vt)\.tiktok\.com/([\w-]+)',
 ]
+
+# Instagram patterns. Reels live at /reel/ and /reels/; older and cross-posted
+# clips at /p/ and /tv/; the share sheet emits /share/CODE, which redirects.
+INSTAGRAM_PATTERNS = [
+    r'(?:https?://)?(?:www\.|m\.)?instagram\.com/(?:[\w.-]+/)?reels?/([\w-]+)',
+    r'(?:https?://)?(?:www\.|m\.)?instagram\.com/(?:[\w.-]+/)?(?:p|tv)/([\w-]+)',
+    r'(?:https?://)?(?:www\.|m\.)?instagram\.com/share/([\w-]+)',
+]
+
+# The extracted ID is the ONLY cache key (Redis job keys, the S3 `{id}/` prefix,
+# and the public job_id), and an Instagram shortcode is 11 chars of the same
+# [A-Za-z0-9_-] alphabet as a YouTube ID — so raw IDs from two platforms can
+# collide and serve one video's recipe for another's. Namespace every non-YouTube
+# source. YouTube stays bare so recipes already cached under a plain ID still hit.
+SOURCE_ID_PREFIX = {
+    VideoSource.TIKTOK: "tt-",
+    VideoSource.INSTAGRAM: "ig-",
+}
 
 
 def extract_video_id(url: str) -> tuple[VideoSource, Optional[str]]:
     """
     Extract video ID and source from a URL.
-    Returns (source, video_id) tuple.
+    Returns (source, video_id) tuple, the ID namespaced by source.
     """
-    # Check YouTube patterns
-    for pattern in YOUTUBE_PATTERNS:
-        match = re.search(pattern, url)
-        if match:
-            return VideoSource.YOUTUBE, match.group(1)
-    
-    # Check TikTok patterns
-    for pattern in TIKTOK_PATTERNS:
-        match = re.search(pattern, url)
-        if match:
-            return VideoSource.TIKTOK, match.group(1)
-    
+    for source, patterns in (
+        (VideoSource.YOUTUBE, YOUTUBE_PATTERNS),
+        (VideoSource.TIKTOK, TIKTOK_PATTERNS),
+        (VideoSource.INSTAGRAM, INSTAGRAM_PATTERNS),
+    ):
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                prefix = SOURCE_ID_PREFIX.get(source, "")
+                return source, f"{prefix}{match.group(1)}"
+
     return VideoSource.UNKNOWN, None
 
 
@@ -126,7 +146,7 @@ def extract_video_id(url: str) -> tuple[VideoSource, Optional[str]]:
 @router.post("/validate", response_model=ValidateResponse)
 async def validate_url(request: ValidateRequest):
     """
-    Deep validation of a YouTube or TikTok URL.
+    Deep validation of a YouTube, TikTok or Instagram URL.
     Checks if the URL format is valid AND if the video exists.
     """
     url = request.url.strip()
@@ -138,7 +158,7 @@ async def validate_url(request: ValidateRequest):
         return ValidateResponse(
             valid=False,
             source=VideoSource.UNKNOWN,
-            error="Invalid URL format. Please enter a valid YouTube or TikTok link."
+            error="Invalid URL format. Please enter a valid YouTube, TikTok or Instagram link."
         )
     
     # Reachability is confirmed later by the residential download worker (the

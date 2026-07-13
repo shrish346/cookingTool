@@ -38,7 +38,6 @@ load_dotenv()
 CLOUD_API_URL = os.getenv("CLOUD_API_URL", "").rstrip("/")
 DOWNLOADER_SECRET = os.getenv("DOWNLOADER_SECRET", "")
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "chefs-loop-clips")
-YOUTUBE_COOKIES = os.getenv("YOUTUBE_COOKIES", "")
 
 POLL_INTERVAL = 5  # seconds between polls when the queue is empty
 
@@ -77,7 +76,9 @@ def _report(client: httpx.Client, payload: dict):
 def handle_job(client: httpx.Client, s3, video_id: str, url: str):
     """Download one video and hand the raw file off to the cloud via R2."""
     print(f"[worker] job {video_id}: downloading {url}")
-    downloader = get_downloader(url, cookies=YOUTUBE_COOKIES or None)
+    # No cookies passed: each downloader reads its own env var (YOUTUBE_COOKIES /
+    # TIKTOK_COOKIES), so a TikTok job never gets handed YouTube's cookie file.
+    downloader = get_downloader(url)
     if downloader is None:
         _report(client, {"video_id": video_id, "error": "Unsupported URL"})
         return

@@ -178,7 +178,9 @@ Examples:
             video_path = str(input_path)
         else:
             # URL - download it
-            downloader = get_downloader(args.input, cookies=os.getenv("YOUTUBE_COOKIES"))
+            # Each downloader picks up its own cookie env var (YOUTUBE_COOKIES /
+            # TIKTOK_COOKIES), so don't hand YouTube's cookies to a TikTok URL.
+            downloader = get_downloader(args.input)
             if not downloader:
                 print(f"Error: Unsupported video URL: {args.input}", file=sys.stderr)
                 sys.exit(1)
