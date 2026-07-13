@@ -1,10 +1,49 @@
-import type { Recipe } from '../types'
+import type { Provenance, Recipe, Source } from '../types'
 
 interface RecipeViewProps {
   recipe: Recipe
   clipsReady: boolean
   onStartCooking: () => void
   onRestart: () => void
+}
+
+/**
+ * Says where a quantity came from. The video rarely states every amount, so the
+ * expansion pass fills the gaps - this is what keeps that honest rather than
+ * silently presenting a guess as something the video showed.
+ */
+function ProvenanceBadge({
+  provenance,
+  sources,
+  sourceId,
+}: {
+  provenance: Provenance
+  sources?: Source[]
+  sourceId?: string
+}) {
+  const source: Source | undefined = sourceId
+    ? sources?.find((s) => s.id === sourceId)
+    : undefined
+
+  const label =
+    provenance === 'video'
+      ? 'seen in video'
+      : provenance === 'reference'
+        ? `from ${source?.site ?? source?.title ?? 'a published recipe'}`
+        : 'our estimate'
+
+  const tone =
+    provenance === 'video'
+      ? 'bg-white/15 text-white/80'
+      : provenance === 'reference'
+        ? 'bg-white/10 text-white/60'
+        : 'bg-white/5 text-white/50'
+
+  return (
+    <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide ${tone}`}>
+      {label}
+    </span>
+  )
 }
 
 /**
@@ -64,25 +103,60 @@ export function RecipeView({ recipe, clipsReady, onStartCooking, onRestart }: Re
         </div>
       </div>
 
+      {/* Tools */}
+      {recipe.tools?.length > 0 && (
+        <div className="px-6 mb-6 animate-slide-up" style={{ animationDelay: '130ms' }}>
+          <h2 className="text-xl font-display font-semibold text-white mb-3">Tools</h2>
+          <div className="glass-card p-4">
+            <ul className="space-y-2">
+              {recipe.tools.map((tool) => (
+                <li key={tool.id} className="flex justify-between items-start gap-3 text-white">
+                  <span>
+                    {tool.name}
+                    {tool.substitute && (
+                      <span className="block text-white/50 text-sm">No {tool.name.toLowerCase()}? {tool.substitute}</span>
+                    )}
+                  </span>
+                  <ProvenanceBadge provenance={tool.provenance} sources={recipe.sources} sourceId={tool.source_id} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
       {/* Ingredients */}
       <div className="px-6 mb-6 animate-slide-up" style={{ animationDelay: '150ms' }}>
         <h2 className="text-xl font-display font-semibold text-white mb-3">Ingredients</h2>
         <div className="glass-card p-4">
-          <ul className="space-y-2">
-            {recipe.ingredients.map((ing, index) => (
-              <li key={index} className="flex justify-between text-white">
-                <span>
-                  {ing.name}
-                  {ing.preparation && (
-                    <span className="text-white/60 text-sm ml-1">({ing.preparation})</span>
-                  )}
-                </span>
-                <span className="text-white/80">
-                  {ing.quantity} {ing.unit}
-                </span>
+          <ul className="space-y-3">
+            {recipe.ingredients.map((ing) => (
+              <li key={ing.id} className="text-white">
+                <div className="flex justify-between gap-3">
+                  <span>
+                    {ing.name}
+                    {ing.preparation && (
+                      <span className="text-white/60 text-sm ml-1">({ing.preparation})</span>
+                    )}
+                    {ing.optional && (
+                      <span className="text-white/40 text-sm ml-1">optional</span>
+                    )}
+                  </span>
+                  <span className="text-white/80 whitespace-nowrap">
+                    {ing.quantity} {ing.unit}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <ProvenanceBadge provenance={ing.provenance} sources={recipe.sources} sourceId={ing.source_id} />
+                  {ing.note && <span className="text-white/50 text-xs">{ing.note}</span>}
+                </div>
               </li>
             ))}
           </ul>
+          <p className="text-white/40 text-xs mt-4 pt-3 border-t border-white/10">
+            The video doesn't state every amount. Anything not shown on camera is filled in
+            from a published recipe or estimated — each one is labeled above.
+          </p>
         </div>
       </div>
 
@@ -91,12 +165,24 @@ export function RecipeView({ recipe, clipsReady, onStartCooking, onRestart }: Re
         <h2 className="text-xl font-display font-semibold text-white mb-3">Instructions</h2>
         <div className="glass-card p-4 space-y-4">
           {recipe.steps.map((step) => (
-            <div key={step.order} className="flex gap-4">
+            <div key={step.id ?? step.order} className="flex gap-4">
               <div className="flex-shrink-0 w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-white font-medium">
                 {step.order}
               </div>
               <div className="flex-1">
+                {(step.display_title || step.title) && (
+                  <h3 className="text-white font-medium mb-1">{step.display_title || step.title}</h3>
+                )}
                 <p className="text-white">{step.instruction}</p>
+                {step.detail && (
+                  <p className="text-white/60 text-sm mt-1.5 leading-relaxed">{step.detail}</p>
+                )}
+                {step.doneness_cue && (
+                  <p className="text-white/70 text-sm mt-2 pl-3 border-l-2 border-white/20">
+                    <span className="text-white/40">You'll know it's right when </span>
+                    {step.doneness_cue}
+                  </p>
+                )}
                 {step.tips && step.tips.length > 0 && (
                   <ul className="mt-2 space-y-1">
                     {step.tips.map((tip, i) => (
@@ -111,6 +197,29 @@ export function RecipeView({ recipe, clipsReady, onStartCooking, onRestart }: Re
           ))}
         </div>
       </div>
+
+      {/* Sources */}
+      {recipe.sources?.length > 0 && (
+        <div className="px-6 mt-6 animate-slide-up" style={{ animationDelay: '250ms' }}>
+          <h2 className="text-xl font-display font-semibold text-white mb-3">Sources</h2>
+          <div className="glass-card p-4">
+            <ul className="space-y-1.5">
+              {recipe.sources.map((source) => (
+                <li key={source.id} className="text-white/70 text-sm">
+                  {source.url ? (
+                    <a href={source.url} target="_blank" rel="noreferrer" className="hover:text-white underline">
+                      {source.title}
+                    </a>
+                  ) : (
+                    source.title
+                  )}
+                  {source.site && <span className="text-white/40"> · {source.site}</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
 
       {/* Fixed bottom buttons */}
       <div className="fixed bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-peach via-peach to-transparent pt-8">

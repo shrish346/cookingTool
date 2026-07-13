@@ -9,6 +9,61 @@ interface CookingViewProps {
 }
 
 /**
+ * The two setup steps have no clip - they show what to lay out instead.
+ */
+function GatherChecklist({ recipe, step }: { recipe: Recipe; step: Step }) {
+  const items =
+    step.kind === 'gather_tools'
+      ? recipe.tools
+          .filter((tool) => step.tool_ids.includes(tool.id))
+          .map((tool) => ({
+            key: tool.id,
+            label: tool.name,
+            hint: tool.substitute,
+          }))
+      : recipe.ingredients
+          .filter((ing) => step.ingredient_ids.includes(ing.id))
+          .map((ing) => ({
+            key: ing.id,
+            label: `${formatQuantity(ing.quantity)} ${ing.unit} ${ing.name}`,
+            hint: ing.preparation,
+          }))
+
+  return (
+    <div className="w-full h-full overflow-y-auto p-6">
+      <ul className="space-y-2.5">
+        {items.map((item) => (
+          <li key={item.key} className="flex items-start gap-2.5 text-white/90">
+            <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-white/50 shrink-0" />
+            <span className="text-sm leading-snug">
+              {item.label}
+              {item.hint && <span className="text-white/50"> — {item.hint}</span>}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/** 0.25 -> "1/4", 3 -> "3", 1.5 -> "1.5" */
+function formatQuantity(quantity: number): string {
+  const fractions: Record<number, string> = {
+    0.25: '1/4',
+    0.33: '1/3',
+    0.5: '1/2',
+    0.67: '2/3',
+    0.75: '3/4',
+  }
+  const whole = Math.floor(quantity)
+  const remainder = Number((quantity - whole).toFixed(2))
+  const fraction = fractions[remainder]
+
+  if (!fraction) return String(Number(quantity.toFixed(2)))
+  return whole > 0 ? `${whole} ${fraction}` : fraction
+}
+
+/**
  * Landscape cooking mode with video loops and step navigation
  */
 
@@ -18,7 +73,12 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
 
   const step: Step = recipe.steps[currentStep]
   const totalSteps = recipe.steps.length
+
   const hasVideo = Boolean(step?.video_clip_url)
+  // A step the video never showed will never get a clip, so don't sit on a spinner
+  // for it. Only a step that *is* grounded and whose clip hasn't landed yet is pending.
+  const clipPending = !hasVideo && step?.has_video_clip !== false && !recipe.clips_ready
+  const isGather = step?.kind === 'gather_tools' || step?.kind === 'gather_ingredients'
 
   // Clips adjacent to the current step, warmed ahead of time. Two forward (the
   // common direction) and one back.
@@ -96,13 +156,25 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
           </div>
 
           {/* Step title and instruction */}
-          <div className="flex-1 flex flex-col justify-center ml-9 -mt-12">
+          <div className="flex-1 flex flex-col justify-center ml-9 -mt-12 overflow-y-auto">
             <h1 className="text-3xl lg:text-4xl font-display font-bold text-white mb-4">
               {step.display_title || step.title || `Step ${step.order}`}
             </h1>
             <p className="text-white/90 text-lg lg:text-xl leading-relaxed max-w-lg">
               {step.instruction}
             </p>
+            {step.detail && (
+              <p className="text-white/70 text-base leading-relaxed max-w-lg mt-3">
+                {step.detail}
+              </p>
+            )}
+            {/* Only shown here when the clip panel isn't already showing it. */}
+            {step.doneness_cue && hasVideo && (
+              <p className="text-white/80 text-base leading-relaxed max-w-lg mt-4 pl-3 border-l-2 border-white/30">
+                <span className="text-white/40">You'll know it's right when </span>
+                {step.doneness_cue}
+              </p>
+            )}
             {step.duration_minutes && (
               <p className="text-white/60 mt-4">
                 ⏱️ {step.duration_minutes} minutes
@@ -134,7 +206,7 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
           </div>
         </div>
 
-        {/* Right panel - Video loop */}
+        {/* Right panel - the clip, or whatever stands in for it */}
         <div className="flex-[0.8] flex items-center justify-end p-8 pr-12 lg:pr-16">
           <div className="relative w-full max-w-[300px] lg:max-w-md aspect-square bg-peach-600/30 rounded-2xl overflow-hidden shadow-2xl">
             {hasVideo ? (
@@ -149,17 +221,27 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
                 preload="auto"
                 className="w-full h-full object-cover"
               />
-            ) : (
+            ) : isGather ? (
+              <GatherChecklist recipe={recipe} step={step} />
+            ) : clipPending ? (
               <div className="w-full h-full flex flex-col items-center justify-center text-white/60">
-                <svg className="w-16 h-16 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.5}
-                    d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
-                  />
-                </svg>
-                <span className="text-sm">Video loop playing...</span>
+                <div className="w-10 h-10 mb-3 rounded-full border-2 border-white/20 border-t-white/70 animate-spin" />
+                <span className="text-sm">Preparing this clip…</span>
+              </div>
+            ) : (
+              /* A step the video never showed. No clip is coming - show the coaching
+                 instead of a video box that stays empty forever. */
+              <div className="w-full h-full flex flex-col justify-center p-6 text-white/80">
+                {step.doneness_cue ? (
+                  <>
+                    <span className="text-xs uppercase tracking-wide text-white/40 mb-2">
+                      You'll know it's right when
+                    </span>
+                    <p className="text-base leading-relaxed">{step.doneness_cue}</p>
+                  </>
+                ) : (
+                  <p className="text-base leading-relaxed text-white/70">{step.detail}</p>
+                )}
               </div>
             )}
           </div>

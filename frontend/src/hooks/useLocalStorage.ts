@@ -28,13 +28,20 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T 
 }
 
 /**
- * Hook specifically for storing the last recipe
+ * Hook specifically for storing the last recipe.
+ *
+ * The key carries the recipe schema version: a returning user with a v1 recipe in
+ * localStorage would otherwise rehydrate it into a UI that expects v2 fields
+ * (step.kind, provenance, tool_ids) and render garbage. Bumping the version in
+ * src/schemas.py should bump it here too.
  */
+const RECIPE_SCHEMA_VERSION = 2
+
 export function useSavedRecipe() {
   return useLocalStorage<{
     recipe: import('../types').Recipe | null
     savedAt: string | null
-  }>('chefs-loop-recipe', { recipe: null, savedAt: null })
+  }>(`chefs-loop-recipe-v${RECIPE_SCHEMA_VERSION}`, { recipe: null, savedAt: null })
 }
 
 
