@@ -1,18 +1,91 @@
 from pydantic import BaseModel, Field, computed_field
 from typing import Optional, Literal
+from uuid import uuid4
+
+# Bump whenever the Recipe shape changes incompatibly. Cached recipes written
+# under an older version are treated as a cache miss and regenerated.
+SCHEMA_VERSION = 2
+
+
+def _new_id() -> str:
+    return uuid4().hex[:8]
+
+
+Provenance = Literal["video", "reference", "model"]
+"""Where a piece of the recipe came from.
+
+video     - observed in the source video (grounded in micro_action_ids)
+reference - taken from a web recipe; cites source_id
+model     - the model's own cooking knowledge; an estimate
+"""
+
+StepKind = Literal[
+    "gather_tools",
+    "gather_ingredients",
+    "prep",
+    "cook",
+    "assemble",
+    "rest",
+    "serve",
+    "technique",
+    "safety",
+]
+
+
+class Source(BaseModel):
+    """A web recipe the expansion pass leaned on to fill gaps the video left."""
+    id: str = Field(default_factory=_new_id)
+    title: str
+    url: Optional[str] = None
+    site: Optional[str] = Field(default=None, description="Human-readable site name, e.g. 'Serious Eats'")
+
+
+class Artifact(BaseModel):
+    """Side-panel content attached to a step. Schema only - nothing populates these yet."""
+    type: str
+    title: Optional[str] = None
+    payload: dict = Field(default_factory=dict)
+
+
+class Tool(BaseModel):
+    id: str = Field(default_factory=_new_id)
+    name: str
+    essential: bool = True
+    substitute: Optional[str] = Field(default=None, description="What to use instead, e.g. 'no whisk? a fork works'")
+    provenance: Provenance = "video"
+    source_id: Optional[str] = None
+
 
 class Ingredient(BaseModel):
+    id: str = Field(default_factory=_new_id)
     name: str
     quantity: float = Field(gt=0)
     unit: str
     preparation: Optional[str] = None
+    optional: bool = False
+    provenance: Provenance = "video"
+    source_id: Optional[str] = None
+    note: Optional[str] = Field(default=None, description="Why this value, when the video didn't state it")
 
 class Step(BaseModel):
+    id: str = Field(default_factory=_new_id, description="Stable step ID. Video clips are keyed off this, not order.")
     order: int = Field(ge=1)
+    kind: StepKind = "cook"
     title: Optional[str] = Field(default=None, description="Short title for this step (e.g., 'Boil the Pasta')")
     instruction: str
+    detail: Optional[str] = Field(default=None, description="Expanded hand-holding explanation for a total beginner")
+    doneness_cue: Optional[str] = Field(default=None, description="How the cook knows this step worked")
     duration_minutes: Optional[int] = None
     tips: Optional[list[str]] = None
+    # Entity references into Recipe.ingredients / Recipe.tools. Groundwork for
+    # recipe mutation: changing an ingredient means regenerating only the steps
+    # whose ingredient_ids contain it.
+    ingredient_ids: list[str] = Field(default_factory=list)
+    tool_ids: list[str] = Field(default_factory=list)
+    depends_on: list[str] = Field(default_factory=list, description="Step IDs this step follows. Linear chain for now; the seam a DAG grows from.")
+    provenance: Provenance = "video"
+    source_id: Optional[str] = None
+    artifacts: list[Artifact] = Field(default_factory=list)
     # Micro-action based video mapping (V2 approach)
     micro_action_ids: Optional[list[int]] = Field(default=None, description="IDs of micro-actions that comprise this step")
     micro_action_descriptions: Optional[list[str]] = Field(default=None, description="Descriptions of micro-actions (for debugging)")
@@ -36,17 +109,23 @@ class Step(BaseModel):
         return ' '.join(words) + ('...' if len(self.instruction.split()) > 5 else '')
 
 class Recipe(BaseModel):
+    schema_version: int = SCHEMA_VERSION
     title: str
     description: Optional[str] = None
     reasoning: Optional[str] = Field(default=None, description="Model's thought process for extracting this recipe")
     ingredients: list[Ingredient]
+    tools: list[Tool] = Field(default_factory=list)
+    sources: list[Source] = Field(default_factory=list, description="Web recipes the expansion pass used to fill gaps")
     steps: list[Step]
     servings: int = Field(gt=0)
+    difficulty: Optional[str] = None
     prep_time_minutes: Optional[int] = None
     cook_time_minutes: Optional[int] = None
     source_url: Optional[str] = None
     cuisine: Optional[str] = None
     tags: Optional[list[str]] = None
+    dish_query: Optional[str] = Field(default=None, description="Short search string for this dish, used for web grounding")
+    expansion_failed: bool = Field(default=False, description="True if the beginner-expansion pass failed and this is the raw grounded recipe")
     nutrition: Optional[dict] = None
     calories: Optional[int] = None
     protein: Optional[int] = None
