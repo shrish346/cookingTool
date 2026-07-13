@@ -21,7 +21,11 @@ export function LandingView({ onSubmit, isValidating, error }: LandingViewProps)
   }
 
   return (
-    <div className="h-full overflow-y-auto flex flex-col items-center justify-center p-6">
+    // The inner min-h-full wrapper is what makes this survive the keyboard opening:
+    // centering directly on a scroll container clips the top of the content once the
+    // content is taller than the (now shorter) viewport, instead of scrolling to it.
+    <div className="h-full overflow-y-auto">
+      <div className="min-h-full flex flex-col items-center justify-center p-6">
       {/* Logo and Title */}
       <div className="flex flex-col items-center mb-12 animate-fade-in">
         <ChefIcon className="w-24 h-24 mb-6" />
@@ -87,7 +91,8 @@ export function LandingView({ onSubmit, isValidating, error }: LandingViewProps)
             {error}
           </div>
         )}
-      </form>
+        </form>
+      </div>
     </div>
   )
 }

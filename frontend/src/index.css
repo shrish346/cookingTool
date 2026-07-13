@@ -8,8 +8,6 @@
   --color-peach-light: #E28B75;
   --color-peach-dark: #C75435;
   --color-cream: #FFF8F5;
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
 }
 
 * {
