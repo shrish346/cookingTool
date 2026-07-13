@@ -114,6 +114,9 @@ YOUR TASK:
    prep the video skipped over, a technique no grounded step covers, a rest the video didn't show,
    a safety warning. These are steps the video never showed - that is the point. Set their
    `grounded_step_id` to null. A new step must carry content that NO grounded step covers.
+   A step you invent has NO video clip, so its `detail` is the only thing the reader has to
+   go on. `detail` is REQUIRED on every step and must be non-empty; on an invented step it has
+   to carry the whole weight of teaching, because there is nothing on screen beside it.
 
 3. **Every quantity gets a real number.** "A pinch of salt" becomes "1/4 tsp". "Some butter" becomes
    "2 tbsp". Never pass a vague amount through to the reader.

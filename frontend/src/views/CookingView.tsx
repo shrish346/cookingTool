@@ -9,33 +9,40 @@ interface CookingViewProps {
 }
 
 /**
- * The two setup steps have no clip - they show what to lay out instead.
+ * The two setup steps have no clip - the thing to look at is the list itself, so
+ * it gets the panel a clip would have had: a plain scrolling list, no video frame
+ * around it.
  */
-function GatherChecklist({ recipe, step }: { recipe: Recipe; step: Step }) {
-  const items =
-    step.kind === 'gather_tools'
-      ? recipe.tools
-          .filter((tool) => step.tool_ids.includes(tool.id))
-          .map((tool) => ({
-            key: tool.id,
-            label: tool.name,
-            hint: tool.substitute,
-          }))
-      : recipe.ingredients
-          .filter((ing) => step.ingredient_ids.includes(ing.id))
-          .map((ing) => ({
-            key: ing.id,
-            label: `${formatQuantity(ing.quantity)} ${ing.unit} ${ing.name}`,
-            hint: ing.preparation,
-          }))
+function GatherList({ recipe, step }: { recipe: Recipe; step: Step }) {
+  const isTools = step.kind === 'gather_tools'
 
+  const items = isTools
+    ? recipe.tools
+        .filter((tool) => step.tool_ids.includes(tool.id))
+        .map((tool) => ({
+          key: tool.id,
+          label: tool.name,
+          hint: tool.substitute,
+        }))
+    : recipe.ingredients
+        .filter((ing) => step.ingredient_ids.includes(ing.id))
+        .map((ing) => ({
+          key: ing.id,
+          label: `${formatQuantity(ing.quantity)} ${ing.unit} ${ing.name}`,
+          hint: ing.preparation,
+        }))
+
+  // h-full bounds the <ul> so it scrolls rather than growing past the panel.
   return (
-    <div className="w-full h-full overflow-y-auto p-6">
-      <ul className="space-y-2.5">
+    <div className="flex flex-col h-full min-h-0 w-full max-w-sm">
+      <h2 className="shrink-0 text-xs uppercase tracking-wide text-white/40 mb-3">
+        {isTools ? 'Tools' : 'Ingredients'} · {items.length}
+      </h2>
+      <ul className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-2">
         {items.map((item) => (
-          <li key={item.key} className="flex items-start gap-2.5 text-white/90">
-            <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-white/50 shrink-0" />
-            <span className="text-sm leading-snug">
+          <li key={item.key} className="flex items-start gap-3 text-white/90">
+            <span className="mt-2 w-1.5 h-1.5 rounded-full bg-white/50 shrink-0" />
+            <span className="text-base leading-snug">
               {item.label}
               {item.hint && <span className="text-white/50"> — {item.hint}</span>}
             </span>
@@ -79,6 +86,20 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
   // for it. Only a step that *is* grounded and whose clip hasn't landed yet is pending.
   const clipPending = !hasVideo && step?.has_video_clip !== false && !recipe.clips_ready
   const isGather = step?.kind === 'gather_tools' || step?.kind === 'gather_ingredients'
+
+  // A step with no clip and none coming gets no right panel at all - the text takes
+  // the full width rather than sitting next to an empty frame. (Future artifacts that
+  // stand in for a clip will bring their own display type, not this box.)
+  const showPanel = hasVideo || clipPending || isGather
+
+  // Long steps used to overflow their column and ride up over the step counter. The
+  // column now scrolls instead, and the type scales down first so that scrolling is
+  // the exception rather than the norm.
+  const charCount =
+    (step?.instruction?.length ?? 0) +
+    (step?.detail?.length ?? 0) +
+    (step?.doneness_cue?.length ?? 0)
+  const dense = charCount > 400
 
   // Clips adjacent to the current step, warmed ahead of time. Two forward (the
   // common direction) and one back.
@@ -149,41 +170,50 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
         onClick={handleTap}
       >
         {/* Left panel - Step info */}
-        <div className="flex-[1.2] flex flex-col justify-between p-6 lg:p-8">
-          {/* Step counter */}
-          <div className="text-white/60 text-sm ml-9 -mt-2">
+        <div
+          className={`${showPanel ? 'flex-[1.2]' : 'flex-1'} flex flex-col min-h-0 p-6 lg:p-8`}
+        >
+          {/* Step counter. shrink-0 so a long step can never push into it. */}
+          <div className="shrink-0 text-white/60 text-sm ml-9">
             Step {currentStep + 1} of {totalSteps}
           </div>
 
-          {/* Step title and instruction */}
-          <div className="flex-1 flex flex-col justify-center ml-9 -mt-12 overflow-y-auto">
-            <h1 className="text-3xl lg:text-4xl font-display font-bold text-white mb-4">
-              {step.display_title || step.title || `Step ${step.order}`}
-            </h1>
-            <p className="text-white/90 text-lg lg:text-xl leading-relaxed max-w-lg">
-              {step.instruction}
-            </p>
-            {step.detail && (
-              <p className="text-white/70 text-base leading-relaxed max-w-lg mt-3">
-                {step.detail}
+          {/* Step title and instruction. Centered while it fits, scrolls once it doesn't. */}
+          <div className="flex-1 min-h-0 flex flex-col justify-center ml-9">
+            <div
+              className={`overflow-y-auto py-4 pr-4 ${showPanel ? 'max-w-lg' : 'max-w-3xl'}`}
+            >
+              <h1
+                className={`${dense ? 'text-2xl lg:text-3xl' : 'text-3xl lg:text-4xl'} font-display font-bold text-white mb-4`}
+              >
+                {step.display_title || step.title || `Step ${step.order}`}
+              </h1>
+              <p
+                className={`text-white/90 ${dense ? 'text-base lg:text-lg' : 'text-lg lg:text-xl'} leading-relaxed`}
+              >
+                {step.instruction}
               </p>
-            )}
-            {/* Only shown here when the clip panel isn't already showing it. */}
-            {step.doneness_cue && hasVideo && (
-              <p className="text-white/80 text-base leading-relaxed max-w-lg mt-4 pl-3 border-l-2 border-white/30">
-                <span className="text-white/40">You'll know it's right when </span>
-                {step.doneness_cue}
-              </p>
-            )}
-            {step.duration_minutes && (
-              <p className="text-white/60 mt-4">
-                ⏱️ {step.duration_minutes} minutes
-              </p>
-            )}
+              {step.detail && (
+                <p className="text-white/70 text-base leading-relaxed mt-3">
+                  {step.detail}
+                </p>
+              )}
+              {step.doneness_cue && (
+                <p className="text-white/80 text-base leading-relaxed mt-4 pl-3 border-l-2 border-white/30">
+                  <span className="text-white/40">You'll know it's right when </span>
+                  {step.doneness_cue}
+                </p>
+              )}
+              {step.duration_minutes && (
+                <p className="text-white/60 mt-4">
+                  ⏱️ {step.duration_minutes} minutes
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Navigation buttons */}
-          <div className="flex items-center justify-center gap-4 text-white/80">
+          <div className="shrink-0 flex items-center justify-center gap-4 text-white/80">
             <button
               onClick={(e) => {
                 e.stopPropagation()
@@ -206,46 +236,37 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
           </div>
         </div>
 
-        {/* Right panel - the clip, or whatever stands in for it */}
-        <div className="flex-[0.8] flex items-center justify-end p-8 pr-12 lg:pr-16">
-          <div className="relative w-full max-w-[300px] lg:max-w-md aspect-square bg-peach-600/30 rounded-2xl overflow-hidden shadow-2xl">
-            {hasVideo ? (
-              <video
-                key={step.video_clip_url}
-                ref={videoRef}
-                src={step.video_clip_url}
-                loop
-                muted
-                autoPlay
-                playsInline
-                preload="auto"
-                className="w-full h-full object-cover"
-              />
-            ) : isGather ? (
-              <GatherChecklist recipe={recipe} step={step} />
-            ) : clipPending ? (
-              <div className="w-full h-full flex flex-col items-center justify-center text-white/60">
-                <div className="w-10 h-10 mb-3 rounded-full border-2 border-white/20 border-t-white/70 animate-spin" />
-                <span className="text-sm">Preparing this clip…</span>
-              </div>
+        {/* Right panel - only when there is something to put in it. A step with no
+            clip coming renders no panel at all; its text has the full width instead. */}
+        {showPanel && (
+          <div className="flex-[0.8] flex flex-col justify-center items-end min-h-0 p-8 pr-12 lg:pr-16">
+            {isGather ? (
+              <GatherList recipe={recipe} step={step} />
             ) : (
-              /* A step the video never showed. No clip is coming - show the coaching
-                 instead of a video box that stays empty forever. */
-              <div className="w-full h-full flex flex-col justify-center p-6 text-white/80">
-                {step.doneness_cue ? (
-                  <>
-                    <span className="text-xs uppercase tracking-wide text-white/40 mb-2">
-                      You'll know it's right when
-                    </span>
-                    <p className="text-base leading-relaxed">{step.doneness_cue}</p>
-                  </>
+              <div className="relative w-full max-w-[300px] lg:max-w-md aspect-square bg-peach-600/30 rounded-2xl overflow-hidden shadow-2xl">
+                {hasVideo ? (
+                  <video
+                    key={step.video_clip_url}
+                    ref={videoRef}
+                    src={step.video_clip_url}
+                    loop
+                    muted
+                    autoPlay
+                    playsInline
+                    preload="auto"
+                    className="w-full h-full object-cover"
+                  />
                 ) : (
-                  <p className="text-base leading-relaxed text-white/70">{step.detail}</p>
+                  /* clipPending: the clip is still rendering server-side. */
+                  <div className="w-full h-full flex flex-col items-center justify-center text-white/60">
+                    <div className="w-10 h-10 mb-3 rounded-full border-2 border-white/20 border-t-white/70 animate-spin" />
+                    <span className="text-sm">Preparing this clip…</span>
+                  </div>
                 )}
               </div>
             )}
           </div>
-        </div>
+        )}
 
         {/* Tap zones indicator (subtle) */}
         <div className="absolute inset-0 pointer-events-none flex opacity-0 hover:opacity-100 transition-opacity">

@@ -63,6 +63,9 @@ def merge_expansion(grounded: Recipe, expanded: Recipe) -> Recipe:
         # resolved to real video timing.
         step.has_video_clip = bool(step.micro_action_ids) and step.start_timestamp_seconds is not None
 
+        if not step.has_video_clip:
+            _ensure_detail(step)
+
     groundable = [s for s in grounded.steps if s.has_video_clip]
     if groundable:
         retained = len([s for s in groundable if s.id in consumed]) / len(groundable)
@@ -79,6 +82,26 @@ def merge_expansion(grounded: Recipe, expanded: Recipe) -> Recipe:
     expanded.dish_query = expanded.dish_query or grounded.dish_query
 
     return expanded
+
+
+def _ensure_detail(step: Step) -> None:
+    """Guarantee a clipless step has a `detail`.
+
+    A step with a clip has the video to carry it; a step without one has nothing on
+    screen but its own text, so an empty `detail` leaves the reader with a bare
+    instruction and no coaching. The expander is told to always write one, but it's
+    a model - back it up here with the next-best copy the step already has.
+    """
+    if step.detail and step.detail.strip():
+        return
+
+    # Not doneness_cue: the UI renders that separately, so reusing it would print the
+    # same sentence twice.
+    tip = next((t.strip() for t in (step.tips or []) if t and t.strip()), None)
+    step.detail = tip or (
+        "The video doesn't cover this step, so take it slowly: work through the "
+        "instruction above and check your work before moving on."
+    )
 
 
 def build_gather_steps(recipe: Recipe) -> Recipe:

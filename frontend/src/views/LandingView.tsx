@@ -24,12 +24,12 @@ export function LandingView({ onSubmit, isValidating, error }: LandingViewProps)
     <div className="h-full overflow-y-auto flex flex-col items-center justify-center p-6">
       {/* Logo and Title */}
       <div className="flex flex-col items-center mb-12 animate-fade-in">
-        <ChefIcon className="w-20 h-20 text-white mb-6" />
+        <ChefIcon className="w-24 h-24 mb-6" />
         <h1 className="text-4xl md:text-5xl font-display font-semibold text-white text-center mb-3">
-          Transform Your Cooking Videos
+          Transform videos into interactive guides
         </h1>
-        <p className="text-white/80 text-center text-lg">
-          Paste a YouTube or TikTok link to get started
+        <p className="text-white/80 text-center text-lg max-w-md">
+          Enter a link to a video recipe (YouTube, TikTok, Reels supported)
         </p>
       </div>
 

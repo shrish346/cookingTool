@@ -99,7 +99,7 @@ export interface Recipe {
   expansion_failed?: boolean
 }
 
-export type VideoSource = 'youtube' | 'tiktok' | 'unknown'
+export type VideoSource = 'youtube' | 'tiktok' | 'instagram' | 'unknown'
 
 export interface ValidateResponse {
   valid: boolean
