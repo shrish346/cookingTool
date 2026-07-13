@@ -405,18 +405,40 @@ async def run_pipeline(url: str, video_id: str, source: VideoSource):
         transcript = await asyncio.to_thread(transcriber.process_video, video_path)
 
         # Step 3: VLM + LLM pipeline (using direct video upload to Gemini)
-        await update_status("generating", 50, "Analyzing steps and generating recipe...")
+        # This now covers three model calls - the VLM, the grounding pass, and the
+        # beginner-expansion pass - so the status is split to match.
+        await update_status("generating", 50, "Watching the video...")
 
         vlm_adapter = OpenRouterAdapter()  # Defaults to google/gemini-2.5-flash
         llm_adapter = OpenAIAdapter()
 
         chef = RecipeChef(vlm_adapter=vlm_adapter, llm_adapter=llm_adapter)
-        # Use direct video upload (no frame extraction)
+
+        # generate_recipe_direct runs in a worker thread, so its progress callback has
+        # to hop back onto this loop to touch Redis.
+        loop = asyncio.get_running_loop()
+        stage_progress = {
+            "grounding": (62, "Working out the steps..."),
+            "expanding": (72, "Filling in the details for you..."),
+        }
+
+        def on_stage(stage: str) -> None:
+            if stage in stage_progress:
+                progress, message = stage_progress[stage]
+                asyncio.run_coroutine_threadsafe(
+                    update_status("generating", progress, message), loop
+                )
+
+        # Use direct video upload (no frame extraction). Returns the *expanded* recipe,
+        # so every cache write below carries it - the grounded skeleton is never served.
         recipe = await asyncio.to_thread(
             chef.generate_recipe_direct,
             video_info,
             video_path,
-            transcript
+            transcript,
+            True,       # debug
+            True,       # expand
+            on_stage,
         )
 
         # Add video metadata to recipe
