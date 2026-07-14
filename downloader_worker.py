@@ -32,6 +32,7 @@ import httpx
 from dotenv import load_dotenv
 
 from src.downloaders.factory import get_downloader
+from src.downloaders.ytdlp import clean_error_message
 
 load_dotenv()
 
@@ -102,8 +103,11 @@ def handle_job(client: httpx.Client, s3, video_id: str, url: str):
         print(f"[worker] job {video_id}: done")
     except Exception as e:
         # A failed download must not wedge the cloud job — tell it to fail fast.
-        print(f"[worker] job {video_id}: FAILED — {e}")
-        _report(client, {"video_id": video_id, "error": str(e)})
+        # Cleaned, because this string is shown to the user: yt-dlp colours its errors
+        # for a terminal, and the escape codes render as mojibake in the browser.
+        message = clean_error_message(e)
+        print(f"[worker] job {video_id}: FAILED — {message}")
+        _report(client, {"video_id": video_id, "error": message})
     finally:
         if video_info is not None:
             try:

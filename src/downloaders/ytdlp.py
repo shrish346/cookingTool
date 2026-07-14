@@ -2,9 +2,20 @@ import yt_dlp
 import re
 import tempfile
 import os
+import time
 from pathlib import Path
 from typing import Optional
 from .base import VideoInfo, VideoMetadata
+
+# yt-dlp colours its errors for a terminal. That escape sequence travels all the way
+# into the job's error field and is rendered as mojibake in the browser, so strip it
+# from anything a user might read.
+_ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+
+
+def clean_error_message(exc: object) -> str:
+    """The text of an error, without terminal colour codes."""
+    return _ANSI_ESCAPE.sub('', str(exc)).strip()
 
 
 class YtDlpDownloader:
@@ -23,6 +34,11 @@ class YtDlpDownloader:
     FORMAT: str = "best[ext=mp4]/best"
     COOKIES_ENV: Optional[str] = None
     PROXY_ENV: Optional[str] = None
+
+    # Attempts for a download that fails for no reason we can name. Linear backoff:
+    # a flake clears in seconds, and the user is watching a progress bar meanwhile.
+    DOWNLOAD_ATTEMPTS: int = 3
+    RETRY_BACKOFF_SECONDS: float = 2.0
 
     def __init__(self, cookies: Optional[str] = None):
         self._temp_dir: Optional[tempfile.TemporaryDirectory] = None
@@ -72,7 +88,40 @@ class YtDlpDownloader:
         return None
 
     def download(self, url: str) -> VideoInfo:
-        """Download a video and return VideoInfo."""
+        """Download a video and return VideoInfo, retrying a transient failure.
+
+        YouTube intermittently hands back an empty body for a media URL it just
+        served ("ERROR: The downloaded file is empty"). Nothing about the request is
+        wrong and the next attempt usually works, so a single flake must not cost the
+        user their whole job.
+
+        A failure `explain_error` recognises is *not* retried: those are settled
+        conditions (a login wall, an unreachable network) that a second attempt would
+        only fail slower against.
+        """
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, self.DOWNLOAD_ATTEMPTS + 1):
+            try:
+                return self._download_once(url)
+            except (yt_dlp.utils.DownloadError, FileNotFoundError) as e:
+                friendly = self.explain_error(e)
+                if friendly:
+                    raise RuntimeError(friendly) from e
+
+                last_error = e
+                self._discard_temp_dir()
+
+                if attempt < self.DOWNLOAD_ATTEMPTS:
+                    time.sleep(self.RETRY_BACKOFF_SECONDS * attempt)
+
+        raise RuntimeError(
+            f"The video failed to download after {self.DOWNLOAD_ATTEMPTS} attempts. "
+            "This is usually temporary - please try again. "
+            f"(Last error: {clean_error_message(last_error)})"
+        ) from last_error
+
+    def _download_once(self, url: str) -> VideoInfo:
         # Create temp directory (not using 'with' so it persists)
         self._temp_dir = tempfile.TemporaryDirectory()
         temp_dir_path = self._temp_dir.name
@@ -103,14 +152,19 @@ class YtDlpDownloader:
                     duration_seconds=int(info.get('duration', 0)),
                     description=info.get('description'),
                 )
-        except yt_dlp.utils.DownloadError as e:
-            friendly = self.explain_error(e)
-            if friendly:
-                raise RuntimeError(friendly) from e
-            raise
         finally:
             if 'cookiefile' in ydl_opts:
                 Path(ydl_opts['cookiefile']).unlink(missing_ok=True)
+
+    def _discard_temp_dir(self) -> None:
+        """Drop the temp dir from a failed attempt, so a retry starts on empty ground
+        and a half-written file can't be mistaken for the download."""
+        if self._temp_dir:
+            try:
+                self._temp_dir.cleanup()
+            except Exception:
+                pass
+            self._temp_dir = None
 
     def cleanup(self, video_info: VideoInfo) -> None:
         """Delete the downloaded video file and temp directory."""
@@ -147,7 +201,9 @@ class YtDlpDownloader:
             friendly = self.explain_error(e)
             if friendly:
                 raise RuntimeError(friendly) from e
-            raise
+            # Raw yt-dlp text still names the real cause, which is what we want here -
+            # but not with the terminal colour codes still in it.
+            raise RuntimeError(clean_error_message(e)) from e
         finally:
             if 'cookiefile' in ydl_opts:
                 Path(ydl_opts['cookiefile']).unlink(missing_ok=True)
