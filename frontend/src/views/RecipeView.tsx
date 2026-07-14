@@ -1,10 +1,42 @@
 import type { Provenance, Recipe, Source } from '../types'
 
+interface WarmProgress {
+  done: number
+  total: number
+}
+
 interface RecipeViewProps {
   recipe: Recipe
+  /** The server has rendered and uploaded the clips. */
   clipsReady: boolean
+  /** Those clips are now downloaded on this device. */
+  clipsWarm: boolean
+  warmed: WarmProgress
+  hasStartedCooking: boolean
   onStartCooking: () => void
   onRestart: () => void
+}
+
+/**
+ * Cooking stays shut until the clips are on the device. Someone who clicks straight
+ * through a still-downloading recipe gets a blank box on every step, which reads as
+ * broken - better to say what we're waiting on and let them read the ingredients.
+ */
+function cookingButtonLabel({
+  clipsReady,
+  clipsWarm,
+  warmed,
+  hasStartedCooking,
+}: Pick<RecipeViewProps, 'clipsReady' | 'clipsWarm' | 'warmed' | 'hasStartedCooking'>): string {
+  if (!clipsReady) return 'Preparing video clips...'
+
+  if (!clipsWarm) {
+    return warmed.total > 0
+      ? `Downloading videos (${warmed.done} of ${warmed.total})...`
+      : 'Downloading videos...'
+  }
+
+  return hasStartedCooking ? 'Resume Cooking' : 'Start Cooking'
 }
 
 /**
@@ -49,7 +81,15 @@ function ProvenanceBadge({
 /**
  * Recipe overview view with ingredients and steps
  */
-export function RecipeView({ recipe, clipsReady, onStartCooking, onRestart }: RecipeViewProps) {
+export function RecipeView({
+  recipe,
+  clipsReady,
+  clipsWarm,
+  warmed,
+  hasStartedCooking,
+  onStartCooking,
+  onRestart,
+}: RecipeViewProps) {
   return (
     <div className="h-full overflow-y-auto pb-32 scroll-smooth">
       {/* Header */}
@@ -225,10 +265,10 @@ export function RecipeView({ recipe, clipsReady, onStartCooking, onRestart }: Re
       <div className="fixed bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-peach via-peach to-transparent pt-8">
         <button
           onClick={onStartCooking}
-          disabled={!clipsReady}
+          disabled={!clipsReady || !clipsWarm}
           className="btn-primary w-full mb-2"
         >
-          {clipsReady ? 'Start Cooking' : 'Preparing video clips...'}
+          {cookingButtonLabel({ clipsReady, clipsWarm, warmed, hasStartedCooking })}
         </button>
         <button
           onClick={onRestart}

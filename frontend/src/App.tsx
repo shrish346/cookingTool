@@ -8,6 +8,11 @@ import type { Recipe, StatusResponse } from './types'
 
 type AppState = 'landing' | 'loading' | 'recipe' | 'cooking'
 
+// How long the loading screen will wait on clip downloads before showing the recipe
+// anyway. Long enough for a handful of clips on a slow phone connection; short enough
+// that a dead network doesn't hold the recipe hostage.
+const CLIP_WARM_TIMEOUT_MS = 20_000
+
 export default function App() {
   // App state
   const [state, setState] = useState<AppState>('landing')
@@ -22,6 +27,16 @@ export default function App() {
   // Recipe state
   const [recipe, setRecipe] = useState<Recipe | null>(null)
   const [clipsReady, setClipsReady] = useState(false)
+
+  // Clip download state. `clipsWarm` gates the cooking button; `warmed` is just the
+  // count shown on it while they come down.
+  const [clipsWarm, setClipsWarm] = useState(false)
+  const [warmed, setWarmed] = useState({ done: 0, total: 0 })
+
+  // Cooking position lives here, not in CookingView, so that stepping out to look at
+  // the recipe and coming back resumes on the same step instead of restarting at one.
+  const [cookingStep, setCookingStep] = useState(0)
+  const [hasStartedCooking, setHasStartedCooking] = useState(false)
   
   // Persistent storage
   const [savedRecipe, setSavedRecipe] = useSavedRecipe()
@@ -51,14 +66,42 @@ export default function App() {
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Warm every clip as soon as the recipe exists, in step order, rather than waiting
-  // for cooking mode to ask for one. The user spends time on the recipe view reading
-  // ingredients; that's when the clips get pulled, so stepping through is instant.
-  // Clips arrive on a second poll, so this re-runs when the recipe updates - already
-  // warmed clips are skipped.
+  // Pull the clips down as soon as the recipe is on screen, while the user is reading
+  // the ingredients. Cooking is held shut until they land (see RecipeView) rather than
+  // letting someone click straight through into a step whose video isn't there yet.
+  //
+  // Capped: a slow connection must not disable the button forever, so once the timeout
+  // is up cooking opens regardless and any clip that hasn't landed loads on demand.
   useEffect(() => {
     if (!recipe) return
-    prefetchClips(recipe.steps.map((step) => step.video_clip_url))
+
+    const urls = recipe.steps.map((step) => step.video_clip_url)
+    if (urls.filter(Boolean).length === 0) {
+      setClipsWarm(true)
+      return
+    }
+
+    let cancelled = false
+    setClipsWarm(false)
+
+    const openCooking = () => {
+      if (!cancelled) setClipsWarm(true)
+    }
+
+    const timer = setTimeout(openCooking, CLIP_WARM_TIMEOUT_MS)
+
+    void prefetchClips(urls, (done, count) => {
+      if (cancelled) return
+      setWarmed({ done, total: count })
+    }).then(() => {
+      clearTimeout(timer)
+      openCooking()
+    })
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
   }, [recipe])
 
   // Poll for job status
@@ -68,26 +111,30 @@ export default function App() {
     const pollInterval = setInterval(async () => {
       try {
         const status: StatusResponse = await api.getStatus(jobId)
-        
-        setProgress(status.progress)
-        setStatusMessage(status.message)
 
         if (status.status === 'completed' && status.recipe) {
           clearInterval(pollInterval)
           setRecipe(status.recipe)
           setClipsReady(status.clips_ready)
-          
+
           // Save to localStorage
           setSavedRecipe({
             recipe: status.recipe,
             savedAt: new Date().toISOString(),
           })
-          
+
+          setProgress(status.progress)
+          setStatusMessage(status.message)
           setState('recipe')
         } else if (status.status === 'failed') {
           clearInterval(pollInterval)
           setError(status.error || 'Failed to generate recipe')
           setState('landing')
+        } else {
+          // Pipeline progress. Not applied on completion, so the bar doesn't jump to
+          // 100 and then back down for the clip download.
+          setProgress(status.progress)
+          setStatusMessage(status.message)
         }
       } catch (err) {
         console.error('Error polling status:', err)
@@ -178,9 +225,12 @@ export default function App() {
 
   // Navigation handlers
   const handleStartCooking = useCallback(() => {
+    setHasStartedCooking(true)
     setState('cooking')
   }, [])
 
+  // Both ways out of cooking keep the step, so coming back resumes where they left off.
+  // Only Restart Recipe clears it.
   const handleExitCooking = useCallback(() => {
     setState('recipe')
   }, [])
@@ -192,6 +242,10 @@ export default function App() {
   const handleRestart = useCallback(() => {
     setRecipe(null)
     setClipsReady(false)
+    setClipsWarm(false)
+    setWarmed({ done: 0, total: 0 })
+    setCookingStep(0)
+    setHasStartedCooking(false)
     setJobId(undefined)
     setProgress(0)
     setError(undefined)
@@ -221,14 +275,19 @@ export default function App() {
         <RecipeView
           recipe={recipe}
           clipsReady={clipsReady}
+          clipsWarm={clipsWarm}
+          warmed={warmed}
+          hasStartedCooking={hasStartedCooking}
           onStartCooking={handleStartCooking}
           onRestart={handleRestart}
         />
       )}
-      
+
       {state === 'cooking' && recipe && (
         <CookingView
           recipe={recipe}
+          currentStep={cookingStep}
+          onStepChange={setCookingStep}
           onExit={handleExitCooking}
           onViewRecipe={handleViewRecipe}
         />

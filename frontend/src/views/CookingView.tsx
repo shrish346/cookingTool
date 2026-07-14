@@ -1,9 +1,12 @@
-import { useState, useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { RotateOverlay } from '../components'
 import type { Recipe, Step } from '../types'
 
 interface CookingViewProps {
   recipe: Recipe
+  /** Owned by App, so stepping out to the recipe and back resumes on this step. */
+  currentStep: number
+  onStepChange: (step: number) => void
   onExit: () => void
   onViewRecipe: () => void
 }
@@ -74,8 +77,13 @@ function formatQuantity(quantity: number): string {
  * Landscape cooking mode with video loops and step navigation
  */
 
-export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) {
-  const [currentStep, setCurrentStep] = useState(0)
+export function CookingView({
+  recipe,
+  currentStep,
+  onStepChange,
+  onExit,
+  onViewRecipe,
+}: CookingViewProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
 
   const step: Step = recipe.steps[currentStep]
@@ -112,10 +120,10 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
 
     if (tapX < zoneWidth) {
       // Tap left - previous step
-      setCurrentStep((prev) => Math.max(0, prev - 1))
+      onStepChange(Math.max(0, currentStep - 1))
     } else if (tapX > rect.width - zoneWidth) {
       // Tap right - next step
-      setCurrentStep((prev) => Math.min(totalSteps - 1, prev + 1))
+      onStepChange(Math.min(totalSteps - 1, currentStep + 1))
     }
   }
 
@@ -224,6 +232,11 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
                     autoPlay
                     playsInline
                     preload="auto"
+                    // Without this the clip request is no-cors and the response is
+                    // opaque, which the service worker can neither cache nor slice a
+                    // Range out of - so the prewarmed copy would go unused. The Worker
+                    // sends access-control-allow-origin: *, so CORS mode is fine.
+                    crossOrigin="anonymous"
                     className="w-full h-full object-cover"
                   />
                 ) : (

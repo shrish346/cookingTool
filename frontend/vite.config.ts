@@ -36,7 +36,34 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}']
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        runtimeCaching: [
+          {
+            // Step clips, served cross-origin from the R2 Worker.
+            //
+            // `rangeRequests` is the whole point. A <video> asks for byte ranges and
+            // wants a 206 back; a plain fetch()-warmed HTTP cache entry is a full 200.
+            // Chrome will slice a 206 out of that cached 200, but WebKit will not — so
+            // on iOS every clip was re-downloaded from the network no matter how
+            // eagerly we prefetched. This plugin stores the full response in Cache
+            // Storage and builds the 206 in JS, which doesn't depend on the browser's
+            // media-cache behaviour at all.
+            //
+            // Requires the <video> to be crossOrigin="anonymous", or the response is
+            // opaque and can't be cached or sliced.
+            urlPattern: /\.mp4$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'recipe-clips',
+              rangeRequests: true,
+              cacheableResponse: { statuses: [200] },
+              expiration: {
+                maxEntries: 60,
+                maxAgeSeconds: 60 * 60 * 24 * 30 // 30 days
+              }
+            }
+          }
+        ]
       }
     })
   ],
