@@ -101,43 +101,8 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
     (step?.doneness_cue?.length ?? 0)
   const dense = charCount > 400
 
-  // Clips adjacent to the current step, warmed ahead of time. Two forward (the
-  // common direction) and one back.
-  const adjacentUrls = [
-    recipe.steps[currentStep + 1]?.video_clip_url,
-    recipe.steps[currentStep + 2]?.video_clip_url,
-    recipe.steps[currentStep - 1]?.video_clip_url,
-  ].filter((url): url is string => Boolean(url))
-
-  // Warm the browser's HTTP cache for those clips.
-  //
-  // This used to be hidden <video preload="auto"> elements, which did nothing on
-  // a phone: iOS Safari ignores `preload` on video and refuses to fetch media
-  // bytes until the user actually plays it, and `display: none` suppresses
-  // preloading in other browsers too. So every clip was really loading on demand
-  // — the blank-video stall.
-  //
-  // Fetching the bytes ourselves is a plain HTTP GET, which iOS does honor. The
-  // response lands in the HTTP cache (clips are uploaded `immutable`, 1y max-age),
-  // so the later <video src> resolves from cache instead of the network.
-  const prefetched = useRef<Set<string>>(new Set())
-
-  useEffect(() => {
-    for (const url of adjacentUrls) {
-      if (prefetched.current.has(url)) continue
-      prefetched.current.add(url)
-
-      // Deliberately not aborted on cleanup: stepping forward re-runs this
-      // effect, and the in-flight fetch is usually the clip about to be needed.
-      fetch(url, { cache: 'force-cache' })
-        .then((res) => res.arrayBuffer()) // drain so the body is fully cached
-        .catch(() => {
-          // Prefetch is best-effort; the <video> will still load on demand.
-          prefetched.current.delete(url)
-        })
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adjacentUrls.join(',')])
+  // No prefetching here: App warms every clip in step order as soon as the recipe
+  // lands, which is strictly earlier and covers more steps than this view could.
 
   // Handle tap navigation
   const handleTap = (e: React.MouseEvent) => {
@@ -180,7 +145,11 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
 
           {/* Step title and instruction. Centered while it fits, scrolls once it doesn't. */}
           <div className="flex-1 min-h-0 flex flex-col justify-center ml-9">
+            {/* Keyed by step so it remounts on navigation. Without that, React reuses
+                the node and a step scrolled halfway down hands its scroll offset to the
+                next step, which opens partway into its own text. */}
             <div
+              key={step.id}
               className={`overflow-y-auto py-4 pr-4 ${showPanel ? 'max-w-lg' : 'max-w-3xl'}`}
             >
               <h1
@@ -241,7 +210,8 @@ export function CookingView({ recipe, onExit, onViewRecipe }: CookingViewProps) 
         {showPanel && (
           <div className="flex-[0.8] flex flex-col justify-center items-end min-h-0 p-8 pr-12 lg:pr-16">
             {isGather ? (
-              <GatherList recipe={recipe} step={step} />
+              // Keyed for the same reason as the text column: its <ul> scrolls too.
+              <GatherList key={step.id} recipe={recipe} step={step} />
             ) : (
               <div className="relative w-full max-w-[300px] lg:max-w-md aspect-square bg-peach-600/30 rounded-2xl overflow-hidden shadow-2xl">
                 {hasVideo ? (

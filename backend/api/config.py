@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     youtube_cookies: str = ""
 
     # Residential download worker
+    # Where the worker reaches this API. Only downloader_worker.py reads it, but it
+    # lives in the same .env, and Settings rejects keys it doesn't declare.
+    cloud_api_url: str = ""
     # Shared secret authenticating the home worker's /internal/* calls.
     downloader_secret: str = ""
     # How long the pipeline waits for the worker to upload the raw video

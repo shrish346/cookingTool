@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { LandingView, LoadingView, RecipeView, CookingView } from './views'
 import { useSavedRecipe } from './hooks'
 import { api, ApiError } from './api/client'
+import { prefetchClips } from './api/prefetchClips'
+import { fetchStoredRecipe, requestedRecipeId } from './api/storedRecipe'
 import type { Recipe, StatusResponse } from './types'
 
 type AppState = 'landing' | 'loading' | 'recipe' | 'cooking'
@@ -24,14 +26,40 @@ export default function App() {
   // Persistent storage
   const [savedRecipe, setSavedRecipe] = useSavedRecipe()
 
-  // Load saved recipe on mount
+  // On mount: `?recipe=<video_id>` reads that recipe straight from object storage and
+  // skips the API entirely, so the recipe and cooking views can be worked on without
+  // running the backend. It takes precedence over whatever is in localStorage.
+  // Otherwise, rehydrate the saved recipe as usual.
   useEffect(() => {
+    const storedId = requestedRecipeId()
+
+    if (storedId) {
+      fetchStoredRecipe(storedId)
+        .then((stored) => {
+          setRecipe(stored)
+          setClipsReady(stored.clips_ready)
+          setState('recipe')
+        })
+        .catch((err: Error) => setError(err.message))
+      return
+    }
+
     if (savedRecipe.recipe && state === 'landing') {
       setRecipe(savedRecipe.recipe)
       setClipsReady(savedRecipe.recipe.clips_ready)
       setState('recipe')
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Warm every clip as soon as the recipe exists, in step order, rather than waiting
+  // for cooking mode to ask for one. The user spends time on the recipe view reading
+  // ingredients; that's when the clips get pulled, so stepping through is instant.
+  // Clips arrive on a second poll, so this re-runs when the recipe updates - already
+  // warmed clips are skipped.
+  useEffect(() => {
+    if (!recipe) return
+    prefetchClips(recipe.steps.map((step) => step.video_clip_url))
+  }, [recipe])
 
   // Poll for job status
   useEffect(() => {
