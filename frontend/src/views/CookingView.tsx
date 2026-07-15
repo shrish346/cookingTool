@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { RotateOverlay } from '../components'
 import type { Recipe, Step } from '../types'
 
@@ -74,6 +74,96 @@ function formatQuantity(quantity: number): string {
 }
 
 /**
+ * One clip in the stack. Persistent for as long as its step stays inside the window,
+ * so navigating between neighbouring steps reuses an already-decoded element instead of
+ * remounting a fresh <video> that has to re-open and re-decode before it can paint.
+ *
+ * Only the current layer plays; neighbours are mounted, paused and hidden. They preload
+ * so the *next* step's first frame is already decoded when the user advances - which is
+ * what makes the transition instant on browsers that pre-decode a paused, offscreen
+ * video. iOS/WebKit may defer that decode until play(); the spinner below covers that
+ * window (and any far jump that lands outside the preloaded set) so the box is never
+ * blank, only briefly spinning.
+ */
+function ClipLayer({ url, isCurrent }: { url: string; isCurrent: boolean }) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const [ready, setReady] = useState(false)
+
+  // Play only while current; pause the moment it isn't, so at most one clip ever decodes
+  // continuously (no extra battery/heat from the preloaded neighbours).
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    if (isCurrent) {
+      video.play().catch(() => {
+        // Autoplay might be blocked by the browser.
+      })
+    } else {
+      video.pause()
+    }
+  }, [isCurrent])
+
+  return (
+    <>
+      <video
+        ref={videoRef}
+        src={url}
+        loop
+        muted
+        playsInline
+        preload="auto"
+        // Without this the clip request is no-cors and the response is opaque, which the
+        // service worker can neither cache nor slice a Range out of - so the prewarmed
+        // copy would go unused. The Worker sends access-control-allow-origin: *, so CORS
+        // mode is fine.
+        crossOrigin="anonymous"
+        onLoadedData={() => setReady(true)}
+        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ${
+          isCurrent ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+      />
+      {isCurrent && !ready && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-full border-2 border-white/20 border-t-white/70 animate-spin" />
+        </div>
+      )}
+    </>
+  )
+}
+
+/**
+ * A bounded window of clips - the current step plus its immediate neighbours - stacked in
+ * the frame box. Keyed by step id so a clip that stays in the window across a step change
+ * is reused, not remounted. The window is small (<=3) and only one plays at a time.
+ */
+function ClipStack({
+  recipe,
+  currentStep,
+}: {
+  recipe: Recipe
+  currentStep: number
+}) {
+  const indices = [currentStep - 1, currentStep, currentStep + 1].filter(
+    (i) =>
+      i >= 0 &&
+      i < recipe.steps.length &&
+      Boolean(recipe.steps[i]?.video_clip_url)
+  )
+
+  return (
+    <>
+      {indices.map((i) => (
+        <ClipLayer
+          key={recipe.steps[i].id}
+          url={recipe.steps[i].video_clip_url as string}
+          isCurrent={i === currentStep}
+        />
+      ))}
+    </>
+  )
+}
+
+/**
  * Landscape cooking mode with video loops and step navigation
  */
 
@@ -84,8 +174,6 @@ export function CookingView({
   onExit,
   onViewRecipe,
 }: CookingViewProps) {
-  const videoRef = useRef<HTMLVideoElement>(null)
-
   const step: Step = recipe.steps[currentStep]
   const totalSteps = recipe.steps.length
 
@@ -126,15 +214,6 @@ export function CookingView({
       onStepChange(Math.min(totalSteps - 1, currentStep + 1))
     }
   }
-
-  // Auto-play video when step changes
-  useEffect(() => {
-    if (videoRef.current && hasVideo) {
-      videoRef.current.play().catch(() => {
-        // Autoplay might be blocked by browser
-      })
-    }
-  }, [currentStep, hasVideo])
 
   return (
     <RotateOverlay>
@@ -223,22 +302,7 @@ export function CookingView({
             ) : (
               <div className="relative w-full max-w-[300px] lg:max-w-md aspect-square bg-peach-600/30 rounded-2xl overflow-hidden shadow-2xl">
                 {hasVideo ? (
-                  <video
-                    key={step.video_clip_url}
-                    ref={videoRef}
-                    src={step.video_clip_url}
-                    loop
-                    muted
-                    autoPlay
-                    playsInline
-                    preload="auto"
-                    // Without this the clip request is no-cors and the response is
-                    // opaque, which the service worker can neither cache nor slice a
-                    // Range out of - so the prewarmed copy would go unused. The Worker
-                    // sends access-control-allow-origin: *, so CORS mode is fine.
-                    crossOrigin="anonymous"
-                    className="w-full h-full object-cover"
-                  />
+                  <ClipStack recipe={recipe} currentStep={currentStep} />
                 ) : (
                   /* clipPending: the clip is still rendering server-side. */
                   <div className="w-full h-full flex flex-col items-center justify-center text-white/60">
