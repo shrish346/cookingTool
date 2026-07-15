@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { RotateOverlay } from '../components'
+import { LoadingDots, RotateOverlay } from '../components'
 import type { Recipe, Step } from '../types'
+
+// How long taps must stop before the video panel commits to a step. Short enough to feel
+// instant on a single deliberate tap, long enough to collapse a fast scrub into one
+// settle so we don't mount/decode clips the user only flies past.
+const SETTLE_MS = 150
 
 interface CookingViewProps {
   recipe: Recipe
@@ -124,7 +129,13 @@ function ClipLayer({ url, isCurrent }: { url: string; isCurrent: boolean }) {
       />
       {isCurrent && !ready && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="w-10 h-10 rounded-full border-2 border-white/20 border-t-white/70 animate-spin" />
+          {/* Faster than the default 1s spin: this only shows for a genuinely-loading
+              settled clip, so a quicker spin reads as "actively working", distinct from
+              the calm scrub loader. */}
+          <div
+            className="w-10 h-10 rounded-full border-2 border-white/20 border-t-white/70 animate-spin"
+            style={{ animationDuration: '0.6s' }}
+          />
         </div>
       )}
     </>
@@ -177,16 +188,33 @@ export function CookingView({
   const step: Step = recipe.steps[currentStep]
   const totalSteps = recipe.steps.length
 
-  const hasVideo = Boolean(step?.video_clip_url)
+  // The text column follows every tap instantly, but the video panel commits only once
+  // the user settles (see SETTLE_MS). Initialised to currentStep so entering cooking - or
+  // resuming at a non-zero step - shows the clip immediately, with no debounce on mount.
+  const [settledStep, setSettledStep] = useState(currentStep)
+  useEffect(() => {
+    const timer = setTimeout(() => setSettledStep(currentStep), SETTLE_MS)
+    return () => clearTimeout(timer)
+  }, [currentStep])
+  const isScrubbing = currentStep !== settledStep
+
+  // The whole right panel is a snapshot of the settled step (not just the ClipStack), so
+  // it stays internally consistent and doesn't unmount/remount if a fast scrub crosses a
+  // gather or clipless step.
+  const panelStep: Step = recipe.steps[settledStep]
+  const hasVideo = Boolean(panelStep?.video_clip_url)
   // A step the video never showed will never get a clip, so don't sit on a spinner
   // for it. Only a step that *is* grounded and whose clip hasn't landed yet is pending.
-  const clipPending = !hasVideo && step?.has_video_clip !== false && !recipe.clips_ready
-  const isGather = step?.kind === 'gather_tools' || step?.kind === 'gather_ingredients'
+  const clipPending =
+    !hasVideo && panelStep?.has_video_clip !== false && !recipe.clips_ready
+  const isGather =
+    panelStep?.kind === 'gather_tools' || panelStep?.kind === 'gather_ingredients'
 
   // A step with no clip and none coming gets no right panel at all - the text takes
   // the full width rather than sitting next to an empty frame. (Future artifacts that
-  // stand in for a clip will bring their own display type, not this box.)
-  const showPanel = hasVideo || clipPending || isGather
+  // stand in for a clip will bring their own display type, not this box.) While scrubbing
+  // we always keep the panel so the 3-dot loader has somewhere to live.
+  const showPanel = hasVideo || clipPending || isGather || isScrubbing
 
   // Long steps used to overflow their column and ride up over the step counter. The
   // column now scrolls instead, and the type scales down first so that scrolling is
@@ -296,13 +324,20 @@ export function CookingView({
             clip coming renders no panel at all; its text has the full width instead. */}
         {showPanel && (
           <div className="flex-[0.8] flex flex-col justify-center items-end min-h-0 p-8 pr-12 lg:pr-16">
-            {isGather ? (
+            {isScrubbing ? (
+              // Mid-scrub: don't commit to a clip yet. The calm 3-dot pulse (same loader
+              // as the loading screen) reads as "catching up", distinct from the fast
+              // spinner of a clip that's genuinely loading.
+              <div className="relative w-full max-w-[300px] lg:max-w-md aspect-square bg-peach-600/30 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
+                <LoadingDots />
+              </div>
+            ) : isGather ? (
               // Keyed for the same reason as the text column: its <ul> scrolls too.
-              <GatherList key={step.id} recipe={recipe} step={step} />
+              <GatherList key={panelStep.id} recipe={recipe} step={panelStep} />
             ) : (
               <div className="relative w-full max-w-[300px] lg:max-w-md aspect-square bg-peach-600/30 rounded-2xl overflow-hidden shadow-2xl">
                 {hasVideo ? (
-                  <ClipStack recipe={recipe} currentStep={currentStep} />
+                  <ClipStack recipe={recipe} currentStep={settledStep} />
                 ) : (
                   /* clipPending: the clip is still rendering server-side. */
                   <div className="w-full h-full flex flex-col items-center justify-center text-white/60">

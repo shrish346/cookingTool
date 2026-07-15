@@ -1,3 +1,5 @@
+import { LoadingDots } from './LoadingDots'
+
 interface ProgressBarProps {
   progress: number
   className?: string
@@ -16,12 +18,7 @@ export function ProgressBar({ progress, className = '' }: ProgressBarProps) {
         />
       </div>
       <div className="flex justify-center mt-3">
-        {/* Loading dots */}
-        <div className="flex gap-2">
-          <span className="w-2 h-2 bg-white/60 rounded-full animate-pulse" style={{ animationDelay: '0ms' }} />
-          <span className="w-2 h-2 bg-white/60 rounded-full animate-pulse" style={{ animationDelay: '200ms' }} />
-          <span className="w-2 h-2 bg-white/60 rounded-full animate-pulse" style={{ animationDelay: '400ms' }} />
-        </div>
+        <LoadingDots />
       </div>
     </div>
   )
