@@ -143,7 +143,14 @@ def build_gather_steps(recipe: Recipe) -> Recipe:
             has_video_clip=False,
         ))
 
-    recipe.steps = gather + recipe.steps
+    # Pull the "make ahead" steps (pre-made components the video assumed were already
+    # done, e.g. cooking the rice) to the front of the body, right after the gather
+    # steps. They come out of the expansion mixed in wherever the model placed them;
+    # for the reader they're prerequisites, so they belong before the live cook.
+    precomponents = [s for s in recipe.steps if s.kind == "prep_component"]
+    body = [s for s in recipe.steps if s.kind != "prep_component"]
+
+    recipe.steps = gather + precomponents + body
     return relink_steps(recipe)
 
 

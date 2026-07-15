@@ -9,6 +9,7 @@ export type Provenance =
 export type StepKind =
   | 'gather_tools'
   | 'gather_ingredients'
+  | 'prep_component'  // making a pre-made component the video assumed was done (e.g. cook the rice); clipless "Make ahead" step
   | 'prep'
   | 'cook'
   | 'assemble'

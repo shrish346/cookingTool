@@ -79,19 +79,27 @@ class RecipeExpander:
             "`provenance: \"model\"`. Leave `sources` empty."
         )
 
-        return f"""You are teaching someone to cook who has NEVER COOKED BEFORE.
+        return f"""You are writing a recipe for the most common kind of home cook: a young adult who
+knows their way around a kitchen at a basic level, but no further.
 
-They do not know what a whisk is. They do not know that eggs go into a bowl before they go into a pan.
-They do not know what "medium heat" means, what "a pinch" is, or how to tell when mushrooms are done.
-They will follow your instructions literally and they will not fill in a single blank on their own.
+They can use a stove and an oven. They know what "chop", "simmer", "whisk" and "medium heat" mean.
+They own the basic tools and can crack an egg without being told how. What they DON'T know is the
+deeper stuff: specialized prep (shelling fresh peas, deveining a shrimp), or a technique specific to
+a cuisine they've never cooked (folding gyoza, tempering spices, getting a wok hei sear). Assume the
+common knowledge; teach the uncommon.
+
+THE RULE: explain what a casual cook wouldn't already know, and NOTHING they obviously would.
+"Use a sharp knife" and "crack the eggs into a bowl" are noise - cut them. "Toast the spices until
+they smell nutty but before they smoke" or "keep the pan moving so the garlic doesn't burn" is
+signal - keep it.
 
 THE DISH: {dish}
 SOURCE VIDEO: {video_info.title} ({video_info.duration_seconds}s)
 
 A cooking video was analyzed and produced the recipe skeleton below. **The video is a BASELINE, not a
 spec.** It shows what your reader wants to make - it does NOT contain everything they need to know to
-make it. Short-form cooking videos skip prep, skip measurements, skip resting, and never explain
-technique. Your job is to fill in every single thing the video left out.
+make it. Short-form cooking videos skip prep, skip measurements, skip resting, and never explain the
+technique that actually matters. Fill in what's missing - but only what's worth saying.
 
 GROUNDED STEPS (what the camera actually saw):
 {steps_text}
@@ -103,30 +111,47 @@ TOOLS OBSERVED: {tools_text}
 
 YOUR TASK:
 
-1. **Expand every grounded step IN PLACE.** Keep it, but rewrite it for a beginner. Give it a `detail`
-   that explains the part they'd get wrong, and a `doneness_cue` that tells them how to know it worked.
-   If a grounded step needs a technique taught - how to crack an egg, how to hold a knife - teach it
-   INSIDE that grounded step. Do NOT split the teaching into a separate step and leave the grounded
-   one as a stub: the grounded step is the one with the video clip attached, so a hollow grounded step
-   means the reader gets a clip with nothing to read next to it.
+1. **Expand every grounded step IN PLACE.** Keep it, but rewrite it for this reader. Give it a `detail`
+   ONLY where there's something non-obvious to say - the part a casual cook would actually get wrong,
+   or a real quantity/temperature/time the video skipped. If a grounded step involves a genuinely
+   uncommon technique, teach it INSIDE that grounded step (that's the step with the video clip - don't
+   hollow it out into a stub and move the teaching elsewhere). If the step is self-explanatory, keep
+   `detail` short or leave it minimal - do not pad it with things the reader plainly already knows.
 
-2. **Insert new steps between them** wherever a beginner would get stuck or hurt themselves:
-   prep the video skipped over, a technique no grounded step covers, a rest the video didn't show,
-   a safety warning. These are steps the video never showed - that is the point. Set their
-   `grounded_step_id` to null. A new step must carry content that NO grounded step covers.
-   A step you invent has NO video clip, so its `detail` is the only thing the reader has to
-   go on. `detail` is REQUIRED on every step and must be non-empty; on an invented step it has
-   to carry the whole weight of teaching, because there is nothing on screen beside it.
+2. **Add a `doneness_cue` ONLY when the finished state is non-obvious** - something the reader could
+   not just guess by looking. "The gravy starts to bubble and thickens enough to coat the back of a
+   spoon", "the onions turn translucent and soft", "the chicken is no longer pink at the thickest
+   part" are all worth saying. "Once everything is in the pan" or "when the water is boiling" is NOT -
+   the reader can see that. When there's nothing non-obvious to signal, set `doneness_cue` to null.
 
-3. **Every quantity gets a real number.** "A pinch of salt" becomes "1/4 tsp". "Some butter" becomes
+3. **Turn assumed pre-made components into their own steps.** Short-form videos often start with an
+   ingredient that was ALREADY cooked or prepared off-camera - "cooked rice", "boiled potatoes",
+   "cooked pasta", "steamed greens". For your reader, making that component IS part of the recipe.
+   For each such assumed component:
+     - Add exactly ONE step with `kind: "prep_component"` and `grounded_step_id: null` that teaches
+       how to make it, concisely. These have no video clip, so the `detail` carries the whole weight.
+     - If the component is effectively its own little dish (rice, pasta, a boiled egg), add its RAW
+       sub-ingredients (e.g. raw rice + water) to the `ingredients` list as real entries, and
+       reference them by id in that step's `ingredient_ids`. If it's a trivial prep of an ingredient
+       already listed (e.g. "toasted nuts" from nuts you already have), don't duplicate it.
+   Do not turn ordinary in-recipe prep into `prep_component` - this is only for components the video
+   treated as already finished before it started.
+
+4. **Insert other new steps** only where this reader would genuinely get stuck or hurt: an uncommon
+   technique no grounded step covers, a rest the video didn't show, a real safety warning (hot oil,
+   raw chicken). Set their `grounded_step_id` to null. Don't invent a step to state the obvious.
+   Every invented step has NO video clip, so its `detail` is the only thing the reader has to go on.
+   `detail` is REQUIRED on every step and must be non-empty; on an invented step it has to carry the
+   whole weight of teaching.
+
+5. **Every quantity gets a real number.** "A pinch of salt" becomes "1/4 tsp". "Some butter" becomes
    "2 tbsp". Never pass a vague amount through to the reader.
 
-4. **List every tool they need**, not just the ones on camera. If they whisk eggs, they need a bowl
-   and a whisk, even if the video cut that shot.
+6. **List every tool they need**, not just the ones on camera.
 
-5. {web_rule}
+7. {web_rule}
 
-Target 12-20 steps. Err on the side of too much hand-holding.
+Target 8-15 steps. Add a step only when it earns its place - resist padding.
 
 PROVENANCE - tag every ingredient, tool and step with where it came from:
   "video"     - the camera showed this
@@ -138,55 +163,72 @@ OUTPUT - return ONLY a JSON object:
 {{
   "title": "Recipe name",
   "description": "One or two sentences.",
-  "difficulty": "beginner",
+  "difficulty": "easy",
   "servings": 2,
   "prep_time_minutes": 10,
   "cook_time_minutes": 15,
-  "cuisine": "Mexican",
-  "tags": ["breakfast"],
+  "cuisine": "Japanese",
+  "tags": ["dinner"],
   "sources": [
-    {{"id": "s1", "title": "Perfect Mushroom Omelette", "url": "https://...", "site": "Serious Eats"}}
+    {{"id": "s1", "title": "Classic Chicken Katsudon", "url": "https://...", "site": "Just One Cookbook"}}
   ],
   "tools": [
-    {{"id": "t1", "name": "10-inch nonstick skillet", "essential": true,
-      "substitute": "any nonstick frying pan", "provenance": "video"}},
-    {{"id": "t2", "name": "Whisk", "essential": false,
-      "substitute": "a fork works fine", "provenance": "model"}}
+    {{"id": "t1", "name": "Small saucepan", "essential": true,
+      "substitute": "any small pot", "provenance": "video"}},
+    {{"id": "t2", "name": "Fine-mesh strainer", "essential": false,
+      "substitute": "a regular sieve", "provenance": "model"}}
   ],
   "ingredients": [
-    {{"id": "i1", "name": "Eggs", "quantity": 3, "unit": "count", "preparation": null,
-      "optional": false, "provenance": "video", "source_id": null, "note": null}},
-    {{"id": "i2", "name": "Kosher salt", "quantity": 0.25, "unit": "tsp", "preparation": null,
-      "optional": false, "provenance": "reference", "source_id": "s1",
-      "note": "The video just says 'a pinch' - this is the standard amount."}}
+    {{"id": "i1", "name": "Cooked white rice", "quantity": 2, "unit": "cups", "preparation": null,
+      "optional": false, "provenance": "video", "source_id": null,
+      "note": "The video starts with rice already made - step 3 shows you how."}},
+    {{"id": "i2", "name": "Raw short-grain rice", "quantity": 1, "unit": "cup", "preparation": null,
+      "optional": false, "provenance": "model", "source_id": null,
+      "note": "Cooks down into the 2 cups of cooked rice the recipe needs."}},
+    {{"id": "i3", "name": "Water", "quantity": 1.25, "unit": "cups", "preparation": null,
+      "optional": false, "provenance": "model", "source_id": null, "note": null}}
   ],
   "steps": [
     {{
+      "grounded_step_id": null,
+      "kind": "prep_component",
+      "title": "Cook the Rice",
+      "instruction": "Rinse 1 cup short-grain rice until the water runs clear, then simmer it with 1.25 cups water, covered, for about 15 minutes.",
+      "detail": "The video assumes you already have cooked rice - here's how. Rinsing washes off surface starch so the grains don't turn gluey; swirl it in a few changes of cold water until the water looks clear, not milky. Bring it to a boil, then drop to the lowest heat, cover, and DON'T lift the lid - the trapped steam is what cooks it. After 15 minutes off the heat, let it sit covered another 10 to finish.",
+      "doneness_cue": "Every grain is tender and the water is fully absorbed - tilt the pot and no liquid pools at the bottom.",
+      "duration_minutes": 25,
+      "tips": ["No lid that fits? A plate works, as long as it traps the steam."],
+      "ingredient_ids": ["i2", "i3"],
+      "tool_ids": ["t1"],
+      "provenance": "model",
+      "source_id": null
+    }},
+    {{
       "grounded_step_id": "a1b2c3d4",
       "kind": "cook",
-      "title": "Cook the Mushrooms",
-      "instruction": "Heat the skillet over medium heat, then add the sliced mushrooms and salt.",
-      "detail": "Medium heat means the pan is hot enough that a drop of water sizzles and dances, but doesn't leap out and spit at you. Give the pan a full 2 minutes to come up to temperature before anything goes in - a cold pan makes mushrooms soggy instead of browned. Spread them in a single layer and then LEAVE THEM ALONE for a minute; stirring too early is the most common mistake here.",
-      "doneness_cue": "The mushrooms have shrunk to about half their size, released their water, and the edges are turning golden brown.",
+      "title": "Simmer the Sauce and Onions",
+      "instruction": "Simmer the sliced onion in the dashi, soy sauce and mirin until soft.",
+      "detail": "Keep it at a gentle simmer, not a hard boil - a rolling boil drives off the mirin's sweetness and toughens the onion.",
+      "doneness_cue": "The onions turn translucent and slump, and the sauce smells sweet rather than sharp.",
       "duration_minutes": 5,
-      "tips": ["Don't crowd the pan - if the mushrooms are piled up they steam instead of browning."],
-      "ingredient_ids": ["i3", "i2"],
+      "tips": null,
+      "ingredient_ids": ["i1"],
       "tool_ids": ["t1"],
       "provenance": "video",
       "source_id": null
     }},
     {{
-      "grounded_step_id": null,
-      "kind": "technique",
-      "title": "Crack and Whisk the Eggs",
-      "instruction": "Crack 3 eggs into a bowl and whisk until the yolks and whites are fully combined.",
-      "detail": "Crack each egg on a flat surface, not the rim of the bowl - the rim drives shell fragments into the egg. Crack them into a separate small bowl first if you're nervous, so one bad egg doesn't ruin the batch. Whisk until you can't see any streaks of clear white left; that takes about 30 seconds of brisk beating.",
-      "doneness_cue": "The mixture is a uniform pale yellow with no clear or stringy bits.",
-      "duration_minutes": 2,
-      "tips": ["If you get shell in the bowl, scoop it out with a larger piece of shell - it acts like a magnet."],
+      "grounded_step_id": "e5f6a7b8",
+      "kind": "assemble",
+      "title": "Spoon Over the Rice",
+      "instruction": "Slide the egg-and-onion mixture over a bowl of the cooked rice.",
+      "detail": null,
+      "doneness_cue": null,
+      "duration_minutes": 1,
+      "tips": null,
       "ingredient_ids": ["i1"],
-      "tool_ids": ["t2"],
-      "provenance": "model",
+      "tool_ids": [],
+      "provenance": "video",
       "source_id": null
     }}
   ]
@@ -195,7 +237,8 @@ OUTPUT - return ONLY a JSON object:
 HARD RULES:
 - `grounded_step_id` MUST be one of the IDs listed above, or null. Never invent one. Never reuse one.
 - Keep EVERY grounded step. You may reorder nothing - the video's steps must stay in their original
-  relative order, with your new steps woven between them.
+  relative order, with your new steps woven between them. (Placement of `prep_component` steps is
+  handled automatically; just emit them.)
 - **Every step must stand on its own.** Never write an instruction like "you already did this above"
   or "see the previous step". If two steps would say the same thing, they should have been one step.
   A step whose instruction defers to another step is a bug, not a step.
@@ -203,6 +246,10 @@ HARD RULES:
 - `ingredient_ids` and `tool_ids` must reference IDs you declared in this same JSON.
 - Do NOT create "gather your tools" or "gather your ingredients" steps - those are added automatically.
 - `quantity` must be a positive number. Use "to taste" as the unit if it truly cannot be measured.
+- On a grounded step (one with a `grounded_step_id`), `detail` and `doneness_cue` may be null when
+  there is genuinely nothing non-obvious to add - don't invent filler. But on an invented or
+  `prep_component` step, `detail` is REQUIRED and non-empty: it has no video clip, so it is all the
+  reader has. `doneness_cue` may still be null there if the finished state is obvious.
 
 Return ONLY the JSON object."""
 
@@ -264,7 +311,7 @@ Return ONLY the JSON object."""
 
 
 VALID_KINDS = {
-    "gather_tools", "gather_ingredients", "prep", "cook",
+    "gather_tools", "gather_ingredients", "prep_component", "prep", "cook",
     "assemble", "rest", "serve", "technique", "safety",
 }
 

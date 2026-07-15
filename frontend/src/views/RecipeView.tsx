@@ -76,6 +76,21 @@ function ProvenanceBadge({
 }
 
 /**
+ * Labeled divider between step groups in the instructions list - used to set the
+ * "Make ahead" prep-component steps apart from the main recipe.
+ */
+function StepDivider({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-3 pt-2 first:pt-0">
+      <span className="text-white/50 text-[11px] uppercase tracking-wider whitespace-nowrap">
+        {label}
+      </span>
+      <span className="flex-1 h-px bg-white/10" />
+    </div>
+  )
+}
+
+/**
  * Recipe overview view with ingredients and steps
  */
 export function RecipeView({
@@ -200,8 +215,17 @@ export function RecipeView({
       <div className="px-6 animate-slide-up" style={{ animationDelay: '200ms' }}>
         <h2 className="text-xl font-display font-semibold text-white mb-3">Instructions</h2>
         <div className="glass-card p-4 space-y-4">
-          {recipe.steps.map((step) => (
-            <div key={step.id ?? step.order} className="flex gap-4">
+          {recipe.steps.map((step, idx) => {
+            const prevKind = idx > 0 ? recipe.steps[idx - 1].kind : undefined
+            // The prep_component steps are hoisted into one contiguous block right
+            // after the gather steps, so a kind transition is enough to label the group.
+            const startsMakeAhead = step.kind === 'prep_component' && prevKind !== 'prep_component'
+            const startsRecipe = step.kind !== 'prep_component' && prevKind === 'prep_component'
+            return (
+            <div key={step.id ?? step.order}>
+            {startsMakeAhead && <StepDivider label="Make ahead — do these first" />}
+            {startsRecipe && <StepDivider label="Recipe" />}
+            <div className="flex gap-4">
               <div className="flex-shrink-0 w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-white font-medium">
                 {step.order}
               </div>
@@ -230,7 +254,9 @@ export function RecipeView({
                 )}
               </div>
             </div>
-          ))}
+            </div>
+            )
+          })}
         </div>
       </div>
 

@@ -265,6 +265,11 @@ export function CookingView({
               key={step.id}
               className={`overflow-y-auto py-4 pr-4 animate-slide-up ${showPanel ? 'max-w-lg' : 'max-w-3xl'}`}
             >
+              {step.kind === 'prep_component' && (
+                <span className="inline-block mb-3 px-2 py-0.5 rounded-full bg-white/15 text-white/70 text-[11px] uppercase tracking-wider">
+                  Make ahead
+                </span>
+              )}
               <h1
                 className={`${dense ? 'text-2xl lg:text-3xl' : 'text-3xl lg:text-4xl'} font-display font-bold text-white mb-4`}
               >

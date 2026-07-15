@@ -4,7 +4,7 @@ from uuid import uuid4
 
 # Bump whenever the Recipe shape changes incompatibly. Cached recipes written
 # under an older version are treated as a cache miss and regenerated.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _new_id() -> str:
@@ -22,6 +22,7 @@ model     - the model's own cooking knowledge; an estimate
 StepKind = Literal[
     "gather_tools",
     "gather_ingredients",
+    "prep_component",
     "prep",
     "cook",
     "assemble",
@@ -30,6 +31,9 @@ StepKind = Literal[
     "technique",
     "safety",
 ]
+"""prep_component: making a pre-required component the source video assumed was
+already done (cooked rice, steamed potatoes). Clipless, grouped as "Make ahead"
+right after the gather steps."""
 
 
 class Source(BaseModel):
