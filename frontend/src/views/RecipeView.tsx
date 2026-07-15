@@ -25,15 +25,12 @@ interface RecipeViewProps {
 function cookingButtonLabel({
   clipsReady,
   clipsWarm,
-  warmed,
   hasStartedCooking,
-}: Pick<RecipeViewProps, 'clipsReady' | 'clipsWarm' | 'warmed' | 'hasStartedCooking'>): string {
+}: Pick<RecipeViewProps, 'clipsReady' | 'clipsWarm' | 'hasStartedCooking'>): string {
   if (!clipsReady) return 'Preparing video clips...'
 
   if (!clipsWarm) {
-    return warmed.total > 0
-      ? `Downloading videos (${warmed.done} of ${warmed.total})...`
-      : 'Downloading videos...'
+    return 'Preparing Guide...'
   }
 
   return hasStartedCooking ? 'Resume Cooking' : 'Start Cooking'
@@ -85,7 +82,6 @@ export function RecipeView({
   recipe,
   clipsReady,
   clipsWarm,
-  warmed,
   hasStartedCooking,
   onStartCooking,
   onRestart,
@@ -268,7 +264,7 @@ export function RecipeView({
           disabled={!clipsReady || !clipsWarm}
           className="btn-primary w-full mb-2"
         >
-          {cookingButtonLabel({ clipsReady, clipsWarm, warmed, hasStartedCooking })}
+          {cookingButtonLabel({ clipsReady, clipsWarm, hasStartedCooking })}
         </button>
         <button
           onClick={onRestart}
