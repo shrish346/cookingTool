@@ -96,6 +96,71 @@ def compress_video_for_api(
         raise
 
 
+def _iter_json_objects(text: str):
+    """Yield every top-level ``{...}`` substring in ``text``, brace-balanced and
+    string-aware (braces inside JSON strings don't count).
+
+    Used to pull the real JSON object out of a VLM response no matter what surrounds it -
+    prose, a scratchpad, or one or more code fences - since the object's braces are still
+    right there in the raw text.
+    """
+    depth = 0
+    start = -1
+    in_str = False
+    escape = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start != -1:
+                yield text[start : i + 1]
+                start = -1
+
+
+def _extract_scene_json(content: str) -> dict:
+    """Robustly extract the scene object from a direct-video VLM response.
+
+    The model is asked to emit a free-text scratchpad *followed by* the JSON object, and
+    it may fence either, both, or neither. The old "take the first code fence" approach
+    could capture the scratchpad instead - whose lines start with ``[00:28 - ...`` and
+    blow up ``json.loads`` at char 2. Instead, scan every brace-balanced object in the
+    text and return the first that parses into something shaped like a scene; the
+    scratchpad's ``[...]`` lines are ignored because we only look at ``{...}``.
+    """
+    fallback: Optional[dict] = None
+    last_err: Optional[Exception] = None
+    for candidate in _iter_json_objects(content):
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError as e:
+            last_err = e
+            continue
+        if not isinstance(data, dict):
+            continue
+        if any(k in data for k in ("micro_actions", "entities", "summary")):
+            return data
+        if fallback is None:
+            fallback = data
+    if fallback is not None:
+        return fallback
+    if last_err is not None:
+        raise last_err
+    raise ValueError(f"Could not find JSON in response: {content[:200]}...")
+
+
 class OpenRouterAdapter:
     """Adapter for OpenRouter's vision-language models."""
 
@@ -1099,22 +1164,7 @@ Return ONLY the Scratchpad followed by the JSON object."""
         video_duration: float
     ) -> SceneDescription:
         """Extract JSON from the direct video VLM response."""
-        json_content = content
-        if "*** STEP 2: JSON GENERATION ***" in content:
-            json_content = content.split("*** STEP 2: JSON GENERATION ***")[-1]
-        
-        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", json_content)
-        if json_match:
-            json_str = json_match.group(1)
-        else:
-            start = json_content.find("{")
-            end = json_content.rfind("}") + 1
-            if start != -1 and end > start:
-                json_str = json_content[start:end]
-            else:
-                raise ValueError(f"Could not find JSON in response: {content[:200]}...")
-        
-        data = json.loads(json_str)
+        data = _extract_scene_json(content)
         
         # Ensure lists exist
         if not isinstance(data.get("entities"), list):
