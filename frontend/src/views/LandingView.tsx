@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChefIcon } from '../components'
+import { ChefIcon, InstallPrompt } from '../components'
 
 interface LandingViewProps {
   onSubmit: (url: string) => void
@@ -33,7 +33,7 @@ export function LandingView({ onSubmit, isValidating, error }: LandingViewProps)
           Transform videos into interactive guides
         </h1>
         <p className="text-white/80 text-center text-lg max-w-md">
-          Enter a link to a video recipe (YouTube, TikTok, Reels supported)
+          Enter a link to a video recipe (YouTube Shorts Only, TikTok and Insta Reels soon)
         </p>
       </div>
 
@@ -93,6 +93,10 @@ export function LandingView({ onSubmit, isValidating, error }: LandingViewProps)
         )}
         </form>
       </div>
+
+      {/* Self-suppressing: renders nothing on desktop, once installed, or once dismissed.
+          Landing is the only view it's mounted in, so it can't interrupt a cook. */}
+      <InstallPrompt />
     </div>
   )
 }

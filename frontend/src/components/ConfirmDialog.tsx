@@ -1,5 +1,5 @@
 interface ConfirmDialogProps {
-  message: string
+  message: React.ReactNode
   confirmLabel?: string
   cancelLabel?: string
   onConfirm: () => void
@@ -34,7 +34,9 @@ export function ConfirmDialog({
         className="glass-card w-full max-w-xs p-5 animate-slide-up"
         onClick={(e) => e.stopPropagation()}
       >
-        <p className="text-white text-center mb-5">{message}</p>
+        {/* A div, not a p: callers pass block content (see InstallPrompt), which is
+            invalid nested inside a paragraph. */}
+        <div className="text-white text-center mb-5">{message}</div>
         <div className="flex gap-3">
           <button
             onClick={onCancel}
