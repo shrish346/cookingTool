@@ -30,7 +30,12 @@ DEFAULT_EXPANSION_MODEL = "google/gemini-2.5-flash"
 # published recipe, citing a Source minted for the video itself under this reserved ID.
 # The model cites the ID; only code mints the Source, because prune_dangling_references
 # nulls any source_id that doesn't resolve.
-VIDEO_DESCRIPTION_SOURCE_ID = "vd"
+#
+# Spell it out. This value is shown to the model inside the PROVENANCE block, one line under
+# the `provenance` enum - a short opaque token there ("vd") reads as a fourth legal provenance
+# value, and the model wrote it into `provenance` instead of `source_id`. Nothing but code
+# mints or reads this ID, so its only job is to be unmistakable at the point of use.
+VIDEO_DESCRIPTION_SOURCE_ID = "creator-description"
 
 
 class RecipeExpander:
@@ -332,12 +337,16 @@ Return ONLY the JSON object."""
                                 "start_timestamp_seconds", "end_timestamp_seconds"):
                 step.pop(owned_by_us, None)
             step["kind"] = _coerce_kind(step.get("kind"))
+            _coerce_provenance(step)
 
         # order is required (ge=1) but we renumber in relink_steps anyway.
         for index, step in enumerate(data.get("steps", []), start=1):
             step["order"] = index
 
         data["ingredients"] = [_coerce_ingredient(i) for i in data.get("ingredients", [])]
+        for item in (*data["ingredients"], *data.get("tools", [])):
+            if isinstance(item, dict):
+                _coerce_provenance(item)
 
         data["source_url"] = grounded.source_url
         data["video_id"] = grounded.video_id
@@ -390,6 +399,9 @@ VALID_KINDS = {
     "assemble", "rest", "serve", "technique", "safety",
 }
 
+# Mirrors the Provenance Literal in schemas.py.
+VALID_PROVENANCE = {"video", "reference", "model"}
+
 # The model reaches for reasonable-sounding kinds we didn't enumerate ("finish",
 # "plate"). Map the near-misses rather than failing validation - one stray enum
 # is not worth throwing away the whole expansion.
@@ -419,6 +431,30 @@ def _coerce_kind(kind) -> str:
     if normalized in VALID_KINDS:
         return normalized
     return KIND_SYNONYMS.get(normalized, "cook")
+
+
+def _coerce_provenance(item: dict) -> None:
+    """Repair an unrecognized `provenance` in place, so one bad enum can't void the pass.
+
+    `Recipe(**data)` validates the whole object at once, so a single junk provenance on a
+    single ingredient throws away the entire expansion and drops us back to the pass-1
+    recipe. That is a wildly disproportionate blast radius for a field we can infer.
+
+    An unrecognized token that cites a source meant "reference" - citing a source is the
+    thing that distinguishes it. A bare unrecognized token becomes "model", the humblest
+    claim: guessing "video" would assert the camera showed something we have no evidence
+    for, and provenance is the trust surface the frontend renders.
+
+    A *missing* provenance is left alone - the schema already defaults it to "video".
+    """
+    if "provenance" not in item:
+        return
+    value = item["provenance"]
+    normalized = value.strip().lower() if isinstance(value, str) else ""
+    if normalized in VALID_PROVENANCE:
+        item["provenance"] = normalized
+        return
+    item["provenance"] = "reference" if item.get("source_id") else "model"
 
 
 def _coerce_ingredient(ing: dict) -> dict:

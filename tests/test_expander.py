@@ -7,6 +7,7 @@ from src.llm.expander import (
     VIDEO_DESCRIPTION_SOURCE_ID,
     RecipeExpander,
     _coerce_kind,
+    _coerce_provenance,
 )
 from src.schemas import Ingredient, Recipe, Step
 
@@ -129,6 +130,34 @@ class TestCoerceKind:
     ])
     def test_synonyms_and_fallback(self, raw, expected):
         assert _coerce_kind(raw) == expected
+
+
+class TestCoerceProvenance:
+    @pytest.mark.parametrize("item, expected", [
+        ({"provenance": "video"}, "video"),
+        ({"provenance": "  Reference "}, "reference"),
+        # The reserved source id, written into the wrong field. Bare -> the humblest claim.
+        ({"provenance": "vd"}, "model"),
+        # ...but an unknown token that cites a source meant "reference".
+        ({"provenance": "vd", "source_id": "r1"}, "reference"),
+        ({"provenance": "camera"}, "model"),
+        ({"provenance": 7}, "model"),
+    ])
+    def test_repairs_unknown_without_voiding_the_pass(self, item, expected):
+        _coerce_provenance(item)
+        assert item["provenance"] == expected
+
+    def test_missing_is_left_for_the_schema_default(self):
+        item = {"name": "onion"}
+        _coerce_provenance(item)
+        assert "provenance" not in item
+        assert Ingredient(id="i1", **item).provenance == "video"
+
+    def test_reserved_source_id_is_not_mistakable_for_a_provenance(self):
+        # The bug: a two-letter id sat under the PROVENANCE block and got copied into the
+        # enum, failing validation for every camera-sourced entity and voiding the expansion.
+        assert VIDEO_DESCRIPTION_SOURCE_ID not in {"video", "reference", "model"}
+        assert len(VIDEO_DESCRIPTION_SOURCE_ID) > 3
 
 
 class TestPrompt:
