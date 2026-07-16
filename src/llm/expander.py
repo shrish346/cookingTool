@@ -19,11 +19,18 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 from ..downloaders.base import VideoInfo
-from ..schemas import Recipe
+from ..schemas import Recipe, Source, coerce_ingredient_amount
 
 load_dotenv()
 
 DEFAULT_EXPANSION_MODEL = "google/gemini-2.5-flash"
+
+# The creator's description is evidence, but it isn't the camera - an amount read off
+# a caption was never shown being measured. It gets `reference` provenance like any
+# published recipe, citing a Source minted for the video itself under this reserved ID.
+# The model cites the ID; only code mints the Source, because prune_dangling_references
+# nulls any source_id that doesn't resolve.
+VIDEO_DESCRIPTION_SOURCE_ID = "vd"
 
 
 class RecipeExpander:
@@ -62,13 +69,27 @@ class RecipeExpander:
             temperature=0.5,
         )
 
-        return self._parse_response(response.choices[0].message.content, grounded)
+        return self._parse_response(response.choices[0].message.content, grounded, video_info)
 
     def _build_prompt(self, grounded: Recipe, video_info: VideoInfo) -> str:
         dish = grounded.dish_query or grounded.title
         steps_text = self._format_grounded_steps(grounded)
         ingredients_text = self._format_grounded_ingredients(grounded)
         tools_text = ", ".join(tool.name for tool in grounded.tools) or "(none identified in the video)"
+
+        # Creator captions (TikTok/Reels descriptions) often carry the full ingredient
+        # list with amounts - real evidence, but frequently a hashtag wall, so cap it.
+        description_section = ""
+        if video_info.description:
+            description_section = f"""
+CREATOR'S VIDEO DESCRIPTION (may contain the ingredient list or amounts - use what's relevant,
+ignore hashtags and promo; it can name and quantify ingredients, but it does not add steps the
+video never showed). The description is NOT the camera: anything you take from it is
+`provenance: "reference"` with `source_id: "{VIDEO_DESCRIPTION_SOURCE_ID}"` - never "video". Prefer it
+over a published recipe when both give an amount; it's this dish, not a similar one. Do NOT declare
+"{VIDEO_DESCRIPTION_SOURCE_ID}" in `sources` yourself - just cite the id and it will be filled in:
+{video_info.description[:1500]}
+"""
 
         web_rule = (
             "You have web search available. Look up real published recipes for this dish and use "
@@ -95,7 +116,7 @@ signal - keep it.
 
 THE DISH: {dish}
 SOURCE VIDEO: {video_info.title} ({video_info.duration_seconds}s)
-
+{description_section}
 A cooking video was analyzed and produced the recipe skeleton below. **The video is a BASELINE, not a
 spec.** It shows what your reader wants to make - it does NOT contain everything they need to know to
 make it. Short-form cooking videos skip prep, skip measurements, skip resting, and never explain the
@@ -144,18 +165,31 @@ YOUR TASK:
    `detail` is REQUIRED on every step and must be non-empty; on an invented step it has to carry the
    whole weight of teaching.
 
-5. **Every quantity gets a real number.** "A pinch of salt" becomes "1/4 tsp". "Some butter" becomes
-   "2 tbsp". Never pass a vague amount through to the reader.
+5. **Pin down every amount you can.** "A pinch of salt" becomes "1/4 tsp". "Some butter" becomes
+   "2 tbsp". Get the number from the video's evidence, the creator's description, or a published
+   recipe - and tag where it came from. ONLY when no source can pin a number AND the amount is
+   genuinely judgment-based (salt "to taste", oil "for frying") set `quantity: null` and put the
+   honest wording in `amount_text`. A cop-out `amount_text` on something a reference recipe measures
+   is a bug - resolve it.
 
-6. **List every tool they need**, not just the ones on camera.
+6. **Resolve generic ingredient identities.** A grounded entry like "spices", "seasoning", "masala",
+   or "red spice powder" is a placeholder, not an ingredient - your reader cannot shop for it.
+   Replace it with the concrete named ingredients from a published recipe for this dish (e.g.
+   "1 tsp cumin, 1 tsp coriander, 1/2 tsp turmeric" as separate entries), tagged
+   `provenance: "reference"` with a `source_id` - or `"model"` if no reference names them. If the
+   video's evidence (label, caption, narration) already names it, prefer that name. Reference the
+   new entries from the steps that use them.
 
-7. {web_rule}
+7. **List every tool they need**, not just the ones on camera.
+
+8. {web_rule}
 
 Target 8-15 steps. Add a step only when it earns its place - resist padding.
 
 PROVENANCE - tag every ingredient, tool and step with where it came from:
   "video"     - the camera showed this
-  "reference" - you took it from a published recipe (set source_id)
+  "reference" - you took it from a published recipe, or from the creator's description
+                (set source_id: the recipe's id, or "{VIDEO_DESCRIPTION_SOURCE_ID}" for the description)
   "model"     - your own cooking knowledge; an estimate
 
 OUTPUT - return ONLY a JSON object:
@@ -186,7 +220,9 @@ OUTPUT - return ONLY a JSON object:
       "optional": false, "provenance": "model", "source_id": null,
       "note": "Cooks down into the 2 cups of cooked rice the recipe needs."}},
     {{"id": "i3", "name": "Water", "quantity": 1.25, "unit": "cups", "preparation": null,
-      "optional": false, "provenance": "model", "source_id": null, "note": null}}
+      "optional": false, "provenance": "model", "source_id": null, "note": null}},
+    {{"id": "i4", "name": "Salt", "quantity": null, "unit": null, "amount_text": "to taste",
+      "preparation": null, "optional": false, "provenance": "video", "source_id": null, "note": null}}
   ],
   "steps": [
     {{
@@ -245,7 +281,8 @@ HARD RULES:
 - NEVER output timestamps, `micro_action_ids`, `order`, or `has_video_clip`. Those are not yours to set.
 - `ingredient_ids` and `tool_ids` must reference IDs you declared in this same JSON.
 - Do NOT create "gather your tools" or "gather your ingredients" steps - those are added automatically.
-- `quantity` must be a positive number. Use "to taste" as the unit if it truly cannot be measured.
+- Each ingredient has EITHER a positive `quantity` + `unit`, OR `quantity: null` with `amount_text`
+  set (only for genuinely judgment-based amounts - see task 5). Never both, never neither.
 - On a grounded step (one with a `grounded_step_id`), `detail` and `doneness_cue` may be null when
   there is genuinely nothing non-obvious to add - don't invent filler. But on an invented or
   `prep_component` step, `detail` is REQUIRED and non-empty: it has no video clip, so it is all the
@@ -266,12 +303,22 @@ Return ONLY the JSON object."""
         lines = []
         for ing in grounded.ingredients:
             prep = f" ({ing.preparation})" if ing.preparation else ""
-            lines.append(f"- {ing.name}: {ing.quantity} {ing.unit}{prep}")
+            if ing.quantity is not None:
+                amount = f"{ing.quantity} {ing.unit or ''}".strip()
+            else:
+                amount = ing.amount_text or "amount not shown"
+            lines.append(f"- {ing.name}: {amount}{prep}")
         return "\n".join(lines) or "(none identified)"
 
-    def _parse_response(self, content: str, grounded: Recipe) -> Recipe:
+    def _parse_response(self, content: str, grounded: Recipe, video_info: VideoInfo) -> Recipe:
         """Parse the model's JSON into a Recipe, mapping grounded_step_id onto step.id."""
         data = json.loads(_extract_json(content))
+
+        # The description source is ours to mint, not the model's to declare.
+        data["sources"] = [
+            s for s in data.get("sources", [])
+            if s.get("id") != VIDEO_DESCRIPTION_SOURCE_ID
+        ]
 
         # merge_expansion looks the step up by `id`. Carrying the model's grounded_step_id
         # across as the step's ID is what lets it re-attach the frozen timing. A step the
@@ -307,7 +354,35 @@ Return ONLY the JSON object."""
                       "sodium", "sugar", "vitamin_a", "vitamin_c", "calcium"):
             data.setdefault(field, getattr(grounded, field))
 
-        return Recipe(**data)
+        recipe = Recipe(**data)
+        _attach_description_source(recipe, video_info)
+        return recipe
+
+
+def _attach_description_source(recipe: Recipe, video_info: VideoInfo) -> None:
+    """Mint the Source for the creator's description, if anything actually cites it.
+
+    Minted only on demand: an uncited source would show up in the recipe's Sources
+    list claiming the description was used when it wasn't. If the model cited the id
+    without a description to read (or we decline to mint), prune_dangling_references
+    nulls the citation back to a bare `reference` - visible, not wrong.
+    """
+    cited = any(
+        item.source_id == VIDEO_DESCRIPTION_SOURCE_ID
+        for item in (*recipe.ingredients, *recipe.tools, *recipe.steps)
+    )
+    if not cited or not video_info.description:
+        return
+
+    recipe.sources.append(
+        Source(
+            id=VIDEO_DESCRIPTION_SOURCE_ID,
+            title=video_info.title or "The source video",
+            url=video_info.url,
+            # Renders as "from the creator's description" on the provenance badge.
+            site="the creator's description",
+        )
+    )
 
 
 VALID_KINDS = {
@@ -347,16 +422,8 @@ def _coerce_kind(kind) -> str:
 
 
 def _coerce_ingredient(ing: dict) -> dict:
-    """Ingredient.quantity is `gt=0`, but the prompt invites 'to taste' amounts."""
-    quantity = ing.get("quantity")
-    if isinstance(quantity, str):
-        match = re.search(r"(\d+\.?\d*)", quantity)
-        quantity = float(match.group(1)) if match else None
-    if not isinstance(quantity, (int, float)) or quantity <= 0:
-        quantity = 1.0
-    ing["quantity"] = float(quantity)
-    ing["unit"] = ing.get("unit") or "to taste"
-    return ing
+    """Normalize amounts without fabricating: vague stays vague (amount_text)."""
+    return coerce_ingredient_amount(ing)
 
 
 def _extract_json(content: str) -> str:

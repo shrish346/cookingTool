@@ -8,7 +8,14 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 from ..downloaders.base import VideoInfo
-from ..schemas import Recipe, SceneLog, Tool, compute_frame_indices_from_micro_actions, compute_timestamps_from_micro_actions
+from ..schemas import (
+    Recipe,
+    SceneLog,
+    Tool,
+    coerce_ingredient_amount,
+    compute_frame_indices_from_micro_actions,
+    compute_timestamps_from_micro_actions,
+)
 
 load_dotenv()
 
@@ -95,6 +102,9 @@ Use the transcript to cross-reference ingredient amounts, clarify steps, and add
         # Format micro-actions timeline (with timestamps if available)
         micro_actions_text = self._format_micro_actions(scene_log, use_timestamps)
 
+        # Keyframe/transcript amount readings (empty string when there are none)
+        observations_section = self._format_observations(scene_log)
+
         return f"""You are a forensic video analyst building a factual record of what a cooking video showed.
 
 This is the GROUNDING pass. Your ONLY job is fidelity: report what the camera saw, grouped into
@@ -114,9 +124,9 @@ SCENE ANALYSIS:
 {scene_text}
 
 MICRO-ACTIONS TIMELINE:
-(Format: ID | Timestamp | Duration | Action | Entity | State Change)
+(Format: ID | Timestamp | Duration | Action | Entity | Stated Amount | State Change)
 {micro_actions_text}
-
+{observations_section}
 YOUR TASK:
 1. Identify the dish, and write a short search query for it (`dish_query`) - the next pass uses this
    to look up published recipes for the same dish.
@@ -147,7 +157,8 @@ Return a valid JSON object with this exact structure:
     "cuisine": "Italian",
     "tags": ["dinner", "pasta"],
     "ingredients": [
-        {{"name": "ingredient", "quantity": 2.0, "unit": "cups", "preparation": "diced"}}
+        {{"name": "ingredient", "quantity": 2.0, "unit": "cups", "preparation": "diced"}},
+        {{"name": "salt", "quantity": null, "unit": null, "amount_text": "to taste"}}
     ],
     "tools": [
         {{"name": "Nonstick skillet"}}
@@ -165,8 +176,13 @@ Return a valid JSON object with this exact structure:
 }}
 
 CONSTRAINTS:
-- **Ingredients:** "quantity" must be a positive number. "unit" is required (use "count" or "to taste"
-  if unclear). Report amounts as shown - do NOT substitute a standard amount for a vague one.
+- **Ingredients:** Report amounts exactly as evidenced. If the video, transcript, on-screen text or a
+  keyframe reading states a measurable amount, set "quantity" (positive number) + "unit". If the
+  amount is honestly vague or never shown, set "quantity": null and put the vague wording in
+  "amount_text" (e.g. "to taste", "a splash"). NEVER invent a number for an amount no source stated.
+- **Ingredient names:** Be as specific as the evidence allows. Prefer a stated/labeled name
+  ("smoked paprika") over a visual guess ("red powder"). If the identity is genuinely unclear,
+  keep the honest generic name ("red spice powder") - the next pass resolves it.
 - **Tools:** Only what is visible on camera. The next pass adds the ones the video cut away from.
 - **Steps:** "micro_action_ids" must be a list of integers from the timeline above.
 - **Noise:** Ignore micro-actions labeled "no relevant cooking action".
@@ -231,7 +247,7 @@ Return ONLY the JSON object.
         has_timestamps = any(a.timestamp_seconds is not None for a in all_actions)
         
         if has_timestamps and use_timestamps:
-            lines = ["ID  | Timestamp | Duration | Action                                                       | Entity       | State Change"]
+            lines = ["ID  | Timestamp | Duration | Action | Entity | Stated Amount | State Change"]
             lines.append("-" * 125)
 
             for action in all_actions:
@@ -241,12 +257,15 @@ Return ONLY the JSON object.
                 elif action.state_after:
                     state_change = f"→ {action.state_after}"
 
+                # No truncation: cutting entity/action text corrupts spice names
+                # ("kashmiri chili powder" -> "kashmiri chi") before the LLM reads them.
                 entity = action.entity or ""
+                stated = action.stated_amount or "-"
                 ts = f"{action.timestamp_seconds:.1f}s" if action.timestamp_seconds is not None else "?"
                 duration = f"{action.duration_seconds:.1f}s" if action.duration_seconds else "-"
 
                 lines.append(
-                    f"{action.id:3} | {ts:>9} | {duration:>8} | {action.action[:60]:<60} | {entity[:12]:<12} | {state_change}"
+                    f"{action.id:3} | {ts:>9} | {duration:>8} | {action.action} | {entity} | {stated} | {state_change}"
                 )
         else:
             # Legacy frame-based format
@@ -262,9 +281,39 @@ Return ONLY the JSON object.
                 
                 entity = action.entity or ""
                 lines.append(
-                    f"{action.id:5} | {action.precise_frame_index:5.2f} | {action.action[:30]:<30} | {entity[:12]:<12} | {state_change}"
+                    f"{action.id:5} | {action.precise_frame_index:5.2f} | {action.action} | {entity} | {state_change}"
                 )
         
+        return "\n".join(lines)
+
+    def _format_observations(self, scene_log: SceneLog) -> str:
+        """Format keyframe/transcript amount readings for the prompt.
+
+        These are the high-res reads the low-res temporal pass can't make:
+        on-screen captions, jar labels, spoken amounts. Empty string when none.
+        """
+        observations = scene_log.get_all_observations()
+        if not observations:
+            return ""
+
+        lines = [
+            "",
+            "AMOUNT / LABEL READINGS (from high-res keyframes and the transcript):",
+            "Use these to name ingredients precisely and to fill in quantities. They are evidence,",
+            "same as the timeline - an amount read here counts as 'shown by the video'.",
+        ]
+        for obs in observations:
+            ts = f"{obs.timestamp_seconds:.1f}s" if obs.timestamp_seconds is not None else "?"
+            parts = [f"[{ts}]"]
+            if obs.ingredient:
+                parts.append(obs.ingredient)
+            if obs.stated_amount:
+                parts.append(f"amount: {obs.stated_amount}")
+            if obs.on_screen_text:
+                parts.append(f'on-screen text: "{obs.on_screen_text}"')
+            parts.append(f"(source: {obs.source})")
+            lines.append("  - " + " | ".join(parts))
+        lines.append("")
         return "\n".join(lines)
 
     def _parse_response(self, content: str, video_info: VideoInfo) -> Recipe:
@@ -311,38 +360,11 @@ Return ONLY the JSON object.
                 if k not in data:
                     data[k] = v
             
-        # Validate and fix ingredients - ensure all have quantity and unit
-        validated_ingredients = []
-        for ing in data.get("ingredients", []):
-            # Ensure quantity exists and is valid
-            if "quantity" not in ing or ing["quantity"] is None:
-                ing["quantity"] = 1.0  # Default to 1 if missing
-            elif isinstance(ing["quantity"], str):
-                # Try to extract number from string (e.g., "2 cups" -> 2.0)
-                match = re.search(r"(\d+\.?\d*)", ing["quantity"])
-                if match:
-                    ing["quantity"] = float(match.group(1))
-                else:
-                    ing["quantity"] = 1.0
-            elif not isinstance(ing["quantity"], (int, float)) or ing["quantity"] <= 0:
-                ing["quantity"] = 1.0  # Fix invalid quantities
-            
-            # Ensure unit exists
-            if "unit" not in ing or not ing.get("unit"):
-                # Try to infer unit from ingredient name or use default
-                name_lower = ing.get("name", "").lower()
-                if any(word in name_lower for word in ["salt", "pepper", "spice", "herb"]):
-                    ing["unit"] = "tsp"
-                elif any(word in name_lower for word in ["sauce", "oil", "vinegar", "milk", "cream"]):
-                    ing["unit"] = "cup"
-                elif any(word in name_lower for word in ["cheese", "meat", "chicken", "beef"]):
-                    ing["unit"] = "oz"
-                else:
-                    ing["unit"] = "piece"  # Default fallback
-            
-            validated_ingredients.append(ing)
-        
-        data["ingredients"] = validated_ingredients
+        # Normalize ingredient amounts WITHOUT fabricating them. A vague amount the
+        # model honestly reported stays vague (quantity=None + amount_text) instead
+        # of being silently defaulted to 1.0 with a keyword-guessed unit - that
+        # destroyed the vagueness signal and mislabeled a guess as provenance "video".
+        data["ingredients"] = [coerce_ingredient_amount(ing) for ing in data.get("ingredients", [])]
         
         # Validate and default servings (required field)
         if data.get("servings") is None or not isinstance(data.get("servings"), int) or data.get("servings") <= 0:

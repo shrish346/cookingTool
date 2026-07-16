@@ -1,10 +1,12 @@
+import re
+
 from pydantic import BaseModel, Field, computed_field
 from typing import Optional, Literal
 from uuid import uuid4
 
 # Bump whenever the Recipe shape changes incompatibly. Cached recipes written
 # under an older version are treated as a cache miss and regenerated.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _new_id() -> str:
@@ -63,13 +65,53 @@ class Tool(BaseModel):
 class Ingredient(BaseModel):
     id: str = Field(default_factory=_new_id)
     name: str
-    quantity: float = Field(gt=0)
-    unit: str
+    # Either quantity+unit (a measurable amount) or amount_text (an honestly vague
+    # one: "to taste", "a splash") is populated — never a fabricated number.
+    quantity: Optional[float] = Field(default=None, gt=0)
+    unit: Optional[str] = None
+    amount_text: Optional[str] = Field(default=None, description="Non-numeric amount when no source pins a number, e.g. 'to taste', 'a splash'")
     preparation: Optional[str] = None
     optional: bool = False
     provenance: Provenance = "video"
     source_id: Optional[str] = None
     note: Optional[str] = Field(default=None, description="Why this value, when the video didn't state it")
+
+# Unit strings LLMs emit that are really vague amounts, not units.
+_NON_UNITS = {"to taste", "as needed", "a pinch", "pinch", "some", "a splash", "splash", "unknown", "n/a"}
+
+
+def coerce_ingredient_amount(ing: dict) -> dict:
+    """Normalize a raw LLM ingredient dict's amount WITHOUT fabricating one.
+
+    Measurable amounts become quantity+unit; honestly vague ones become
+    amount_text with quantity=None. Never invents a number - a vague amount
+    the model reported must stay visibly vague (the expander resolves it
+    against a reference recipe, or it ships as amount_text).
+    """
+    qty = ing.get("quantity")
+
+    if isinstance(qty, str):
+        # e.g. "2 cups" -> 2.0; "a pinch" -> amount_text
+        match = re.search(r"(\d+\.?\d*)", qty)
+        if match and float(match.group(1)) > 0:
+            ing["quantity"] = float(match.group(1))
+        else:
+            if not ing.get("amount_text"):
+                ing["amount_text"] = qty.strip()
+            ing["quantity"] = None
+    elif isinstance(qty, bool) or not isinstance(qty, (int, float)) or (isinstance(qty, (int, float)) and qty <= 0):
+        ing["quantity"] = None
+
+    # A "unit" like "to taste" is a vague amount wearing a unit costume.
+    unit = ing.get("unit")
+    if isinstance(unit, str) and unit.strip().lower() in _NON_UNITS:
+        if not ing.get("amount_text"):
+            ing["amount_text"] = unit.strip()
+        ing["unit"] = None
+        ing["quantity"] = None
+
+    return ing
+
 
 class Step(BaseModel):
     id: str = Field(default_factory=_new_id, description="Stable step ID. Video clips are keyed off this, not order.")
@@ -181,6 +223,7 @@ class MicroAction(BaseModel):
     state_before: Optional[str] = Field(default=None, description="State before action (e.g., 'raw', 'whole')")
     state_after: Optional[str] = Field(default=None, description="State after action (e.g., 'browning', 'diced')")
     concurrent_with_other_action: Optional[bool] = Field(default=None, description="Whether this action happens at the same time as another")
+    stated_amount: Optional[str] = Field(default=None, description="Amount for this action's entity when the transcript or on-screen text stated one (e.g., '1 tsp')")
     confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Confidence score")
     
     @computed_field
@@ -224,6 +267,21 @@ class Entity(BaseModel):
     state: Optional[str] = Field(default=None, description="Current state if applicable (e.g., 'raw', 'chopped', 'boiling')")
 
 
+class Observation(BaseModel):
+    """A quantity/identity reading from a high-res keyframe pass or the transcript.
+
+    Keyframes exist to read what the low-res temporal pass can't: on-screen
+    captions ("1 tsp cumin"), jar labels, measuring spoons. These land here and
+    are fed to the grounding pass alongside the micro-action timeline.
+    """
+    timestamp_seconds: Optional[float] = Field(default=None, ge=0.0, description="When in the video this was read")
+    ingredient: Optional[str] = Field(default=None, description="Ingredient the reading is about, as specifically as identifiable")
+    stated_amount: Optional[str] = Field(default=None, description="Amount as read/heard, verbatim-ish (e.g. '1 tsp', 'about 200ml')")
+    on_screen_text: Optional[str] = Field(default=None, description="Verbatim on-screen caption / label text in the frame")
+    source: Literal["keyframe", "transcript"] = "keyframe"
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
 class StateChange(BaseModel):
     """Tracks a transformation or state change observed in the video."""
     entity: str = Field(description="Name of the entity that changed state")
@@ -250,6 +308,7 @@ class SceneDescription(BaseModel):
     state_changes: list[StateChange] = Field(default_factory=list, description="State transformations observed")
     temporal_actions: list[TemporalAction] = Field(default_factory=list, description="Actions performed")
     micro_actions: list["MicroAction"] = Field(default_factory=list, description="Granular atomic actions with precise timing")
+    observations: list[Observation] = Field(default_factory=list, description="Quantity/label readings from high-res keyframes")
     metadata: Optional[dict] = Field(default_factory=dict, description="Additional metadata (confidence, notes, etc.)")
 
 
@@ -277,6 +336,13 @@ class SceneLog(BaseModel):
             all_actions.extend(scene.micro_actions)
         return sorted(all_actions, key=lambda a: a.precise_frame_index)
     
+    def get_all_observations(self) -> list[Observation]:
+        """Collect all keyframe/transcript observations from all scenes, in time order."""
+        all_obs = []
+        for scene in self.scenes:
+            all_obs.extend(scene.observations)
+        return sorted(all_obs, key=lambda o: o.timestamp_seconds or 0.0)
+
     def build_micro_action_lookup(self, chunk_size: int = 12) -> dict[int, float]:
         """
         Build a lookup table mapping micro-action IDs to their actual frame numbers.

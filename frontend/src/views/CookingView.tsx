@@ -37,7 +37,10 @@ function GatherList({ recipe, step }: { recipe: Recipe; step: Step }) {
         .filter((ing) => step.ingredient_ids.includes(ing.id))
         .map((ing) => ({
           key: ing.id,
-          label: `${formatQuantity(ing.quantity)} ${ing.unit} ${ing.name}`,
+          label:
+            ing.quantity != null
+              ? `${formatQuantity(ing.quantity)} ${ing.unit ?? ''} ${ing.name}`.replace(/\s+/g, ' ')
+              : `${ing.name}${ing.amount_text ? `, ${ing.amount_text}` : ''}`,
           hint: ing.preparation,
         }))
 

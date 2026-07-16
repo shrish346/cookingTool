@@ -194,7 +194,7 @@ export function RecipeView({
                     )}
                   </span>
                   <span className="text-white/80 whitespace-nowrap">
-                    {ing.quantity} {ing.unit}
+                    {ing.quantity != null ? `${ing.quantity} ${ing.unit ?? ''}`.trim() : ing.amount_text ?? ''}
                   </span>
                 </div>
                 <div className="flex items-center gap-2 mt-1">

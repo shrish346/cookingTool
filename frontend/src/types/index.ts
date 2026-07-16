@@ -37,8 +37,11 @@ export interface Tool {
 export interface Ingredient {
   id: string
   name: string
-  quantity: number
-  unit: string
+  /** Either quantity+unit or amount_text is set — never a fabricated number. */
+  quantity?: number | null
+  unit?: string | null
+  /** Honestly vague amount when no source pins a number, e.g. 'to taste'. */
+  amount_text?: string | null
   preparation?: string
   optional: boolean
   provenance: Provenance

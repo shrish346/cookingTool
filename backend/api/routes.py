@@ -438,6 +438,7 @@ async def run_pipeline(url: str, video_id: str, source: VideoSource):
         # to hop back onto this loop to touch Redis.
         loop = asyncio.get_running_loop()
         stage_progress = {
+            "reading": (58, "Reading the fine print..."),
             "grounding": (62, "Working out the steps..."),
             "expanding": (72, "Filling in the details for you..."),
         }

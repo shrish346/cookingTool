@@ -15,7 +15,7 @@ from openai import OpenAI, RateLimitError, APIError
 from dotenv import load_dotenv
 
 from ..downloaders.base import VideoInfo
-from ..schemas import Recipe, SceneDescription, MicroAction, Entity, SceneLog
+from ..schemas import Recipe, SceneDescription, MicroAction, Entity, Observation, SceneLog
 from ..processing.frames import FrameExtractor
 
 load_dotenv()
@@ -972,31 +972,35 @@ Return ONLY the Scratchpad followed by the JSON object."""
         self,
         video_info: VideoInfo,
         video_path: str,
+        transcript: str | None = None,
         max_retries: int = 3,
         debug: bool = False
     ) -> SceneLog:
         """
         Analyze video by uploading it directly as base64.
-        
+
         This method compresses the video and uploads it to a video-capable
         VLM (like Gemini) for temporal analysis with M-RoPE grounding.
-        
+
         Args:
             video_info: Metadata about the video
             video_path: Path to the local video file
+            transcript: Optional audio transcript. Used only to NAME and QUANTIFY
+                what is visually observed (the compressed video is silent) - the
+                prompt forbids inventing actions from narration.
             max_retries: Maximum retry attempts
             debug: Whether to print debug information (like micro-actions timeline)
-            
+
         Returns:
             SceneLog containing all micro-actions with timestamps
         """
         print(f"      Compressing video for API upload...")
-        
+
         compressed_path, size_mb = compress_video_for_api(
             video_path,
             max_size_mb=10.0,
-            target_width=360,
-            target_fps=2
+            target_width=480,
+            target_fps=3
         )
         
         try:
@@ -1012,7 +1016,7 @@ Return ONLY the Scratchpad followed by the JSON object."""
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": self._build_video_direct_prompt(video_info)},
+                        {"type": "text", "text": self._build_video_direct_prompt(video_info, transcript)},
                         {
                             "type": "video_url",
                             "video_url": {"url": f"data:video/mp4;base64,{video_b64}"}
@@ -1095,14 +1099,158 @@ Return ONLY the Scratchpad followed by the JSON object."""
             if os.path.exists(compressed_path):
                 os.unlink(compressed_path)
 
-    def _build_video_direct_prompt(self, video_info: VideoInfo) -> str:
+    def read_keyframes(
+        self,
+        video_info: VideoInfo,
+        keyframes: list[tuple[float, str]],
+        max_retries: int = 3,
+    ) -> list[Observation]:
+        """Read high-res keyframes for text/labels/amounts the low-res pass can't see.
+
+        Args:
+            video_info: Metadata about the video
+            keyframes: (timestamp_seconds, base64 JPEG) pairs from
+                keyframes.extract_reading_keyframes
+            max_retries: Maximum retry attempts
+
+        Returns:
+            Observations (on-screen text, labels, stated amounts) to attach to the
+            SceneLog before the grounding pass.
+        """
+        if not keyframes:
+            return []
+
+        content: list[dict] = [{"type": "text", "text": self._build_keyframe_reading_prompt(video_info)}]
+        for ts, b64 in keyframes:
+            content.append({"type": "text", "text": f"Frame at {ts:.1f}s:"})
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+            })
+
+        messages = [{"role": "user", "content": content}]
+
+        last_error: Exception | None = None
+        for attempt in range(max_retries):
+            try:
+                response = self._client.chat.completions.create(
+                    model=self._model,
+                    messages=messages,
+                    max_tokens=4096,
+                    temperature=0.2,  # reading, not writing - stay literal
+                )
+                return self._parse_keyframe_response(response.choices[0].message.content)
+
+            except RateLimitError as e:
+                wait_time = (2 ** attempt) * 2
+                print(f"[VLM] Keyframe reading rate limited, waiting {wait_time}s...")
+                time.sleep(wait_time)
+                last_error = e
+
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"[VLM] Keyframe reading error: {e}, retrying...")
+                    time.sleep(1)
+                    last_error = e
+                else:
+                    raise
+
+        raise last_error or Exception("Failed to read keyframes")
+
+    def _build_keyframe_reading_prompt(self, video_info: VideoInfo) -> str:
+        return f"""You are reading high-resolution frames from a cooking video ("{video_info.title}").
+These are the moments where an ingredient is added or measured. Your ONLY job is to read: extract
+exact text and visually-evidenced amounts. You are not describing the cooking.
+
+For EACH frame, report:
+1. on_screen_text - ALL overlay captions, recipe-card text, jar/package label text, VERBATIM.
+   This is the highest-value field; creators put amounts here ("1 tsp cumin").
+2. ingredient - what ingredient is being handled, named as specifically as the evidence allows.
+   A readable label or caption beats appearance ("smoked paprika", not "red powder"). If the
+   identity is unreadable, give an honest visual description ("red spice powder").
+3. stated_amount - ONLY if the frame evidences it: a caption/label amount, or a clearly visible
+   measuring spoon/cup ("1 tsp measuring spoon of turmeric"). Never estimate an unmeasured pile.
+4. confidence - 0.0-1.0 for the ingredient identification.
+
+Skip a frame entirely if it shows nothing readable and no identifiable ingredient.
+
+Return ONLY a JSON object:
+{{
+  "observations": [
+    {{"timestamp": 12.5, "ingredient": "smoked paprika", "stated_amount": "1 tsp",
+      "on_screen_text": "1 tsp smoked paprika", "confidence": 0.95}},
+    {{"timestamp": 31.0, "ingredient": "soy sauce", "stated_amount": null,
+      "on_screen_text": "Kikkoman soy sauce (label)", "confidence": 0.9}}
+  ]
+}}
+
+Use each frame's stated timestamp for "timestamp". Omit nothing you can read; invent nothing you can't."""
+
+    def _parse_keyframe_response(self, content: str) -> list[Observation]:
+        """Parse the reading response into Observations, skipping invalid entries."""
+        data = None
+        for candidate in _iter_json_objects(content):
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict) and "observations" in parsed:
+                data = parsed
+                break
+        if data is None:
+            return []
+
+        observations = []
+        for obs in data.get("observations", []):
+            if not isinstance(obs, dict):
+                continue
+            # An observation with nothing read carries no signal - drop it.
+            if not any(obs.get(k) for k in ("ingredient", "stated_amount", "on_screen_text")):
+                continue
+            try:
+                observations.append(Observation(
+                    timestamp_seconds=obs.get("timestamp"),
+                    ingredient=obs.get("ingredient"),
+                    stated_amount=obs.get("stated_amount"),
+                    on_screen_text=obs.get("on_screen_text"),
+                    source="keyframe",
+                    confidence=obs.get("confidence"),
+                ))
+            except Exception:
+                continue  # one bad reading is not worth losing the rest
+        return observations
+
+    def _build_video_direct_prompt(self, video_info: VideoInfo, transcript: str | None = None) -> str:
         """Create the instruction prompt for direct video analysis."""
+        description_section = ""
+        if video_info.description:
+            # Creator captions often carry the ingredient list; also often hashtag walls.
+            description_section = f"""
+CREATOR'S DESCRIPTION (may name ingredients/amounts; ignore hashtags and promo):
+{video_info.description[:1500]}
+"""
+
+        transcript_section = ""
+        if transcript:
+            transcript_section = f"""
+AUDIO TRANSCRIPT (the video you receive is silent - this is what was said):
+{transcript}
+
+TRANSCRIPT RULES:
+- Use the transcript ONLY to NAME and QUANTIFY what you visually observe. If you see a red powder
+  added while the narrator says "add the paprika", log "Adding paprika" - not "adding red powder".
+- If the narrator states an amount ("a teaspoon of cumin") for something you SEE happen, record it
+  in that action's "stated_amount".
+- NEVER log an action you did not see, no matter what the narration says. Narration describes;
+  only the camera evidences.
+"""
+
         return f"""You are a forensic video analyst specializing in culinary processes. Your goal is to create a factual log of cooking actions based ONLY on visual evidence.
 
 VIDEO METADATA:
 Title: {video_info.title}
 Duration: {video_info.duration_seconds} seconds
-
+{description_section}{transcript_section}
 *** STEP 1: VISUAL SCRATCHPAD (Mandatory) ***
 Watch the video chronologically. Create a raw text log of distinct physical movements.
 - Format: [Start MM:SS - End MM:SS] : [Entity] -> [Action]
@@ -1121,7 +1269,8 @@ JSON EXAMPLE (Follow this structure exactly):
 {{
   "summary": "Step-by-step preparation of cucumber salad including slicing and seasoning.",
   "entities": [
-    {{"name": "Cucumber", "type": "ingredient"}},
+    {{"name": "Cucumber", "type": "ingredient", "quantity": "2 whole"}},
+    {{"name": "Smoked paprika", "type": "ingredient", "quantity": "1 tsp"}},
     {{"name": "Knife", "type": "tool"}},
     {{"name": "Bowl", "type": "tool"}}
   ],
@@ -1134,10 +1283,11 @@ JSON EXAMPLE (Follow this structure exactly):
       "concurrent_with_other_action": false
     }},
     {{
-      "action": "Adding sliced cucumber to Bowl",
+      "action": "Sprinkling smoked paprika over cucumber in Bowl",
       "start": "00:31",
       "end": "00:33",
-      "entity": "Cucumber",
+      "entity": "Smoked paprika",
+      "stated_amount": "1 tsp",
       "concurrent_with_other_action": false
     }}
   ]
@@ -1155,6 +1305,16 @@ STRICT ACCURACY RULES:
 4. Concurrency: You MUST list simultaneous actions separately. Do not group them into one generic event.
 5. Entity Consistency: Use the exact same name for an entity in the 'micro_actions' list as you defined in the 'entities' list.
 6. Time Format: Output timestamps as "MM:SS" strings in the JSON to avoid math errors.
+7. Read On-Screen Text: Short-form videos often overlay captions ("1 tsp cumin") or show labeled
+   jars and packages. READ them. A caption or label naming an ingredient or amount is visual
+   evidence - use it to name the entity precisely and fill "stated_amount" on the matching action.
+8. Ingredient Specificity: Name every ingredient as specifically as the evidence allows - a label,
+   caption, or narration beats a visual guess ("smoked paprika" not "red powder"). When the identity
+   is genuinely unreadable, log an honest visual description ("red spice powder", "dark sauce") -
+   do NOT guess a specific name without evidence, and do NOT collapse distinct additions into one
+   generic "spices".
+9. Stated Amounts: "stated_amount" is ONLY for amounts the video evidences (caption, label, visible
+   measuring spoon/cup, or narration). If no source states one, omit the field - never estimate.
 
 Return ONLY the Scratchpad followed by the JSON object."""
 
@@ -1230,7 +1390,7 @@ Return ONLY the Scratchpad followed by the JSON object."""
                 ma["timestamp_seconds"] = 0.0
             
             # Ensure entity is a string
-            for field in ["entity", "state_before", "state_after"]:
+            for field in ["entity", "state_before", "state_after", "stated_amount"]:
                 if isinstance(ma.get(field), list):
                     ma[field] = ", ".join(str(v) for v in ma[field])
                 elif ma.get(field) is None:

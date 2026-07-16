@@ -35,7 +35,7 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T 
  * (step.kind, provenance, tool_ids) and render garbage. Bumping the version in
  * src/schemas.py should bump it here too.
  */
-const RECIPE_SCHEMA_VERSION = 3
+const RECIPE_SCHEMA_VERSION = 4
 
 export function useSavedRecipe() {
   return useLocalStorage<{

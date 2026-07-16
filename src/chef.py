@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
 
@@ -181,8 +182,20 @@ class RecipeChef:
             if on_stage:
                 on_stage(name)
 
-        # Stage 1: VLM analyzes video directly (no frame extraction)
-        scene_log = self._vlm.analyze_video_direct(video_info, video_path, debug=debug)
+        # Stage 1: VLM analyzes video directly (no frame extraction). The transcript
+        # goes along so the VLM can name/quantify what it sees (the compressed upload
+        # is silent) - the prompt forbids inventing actions from narration.
+        scene_log = self._vlm.analyze_video_direct(video_info, video_path, transcript=transcript, debug=debug)
+
+        # Stage 1.5: high-res keyframe reading. The temporal pass runs on a hard-compressed
+        # upload that can't read captions/labels, so we pull sharp frames at the moments
+        # ingredients are introduced and read them with a cheap multi-image call. Additive
+        # evidence only - a failure here just means no observations, never a failed recipe.
+        stage("reading")
+        try:
+            self._read_keyframes_into(scene_log, video_info, video_path, debug=debug)
+        except Exception as e:
+            print(f"[Chef] Keyframe reading failed ({e}); continuing without observations")
 
         # Optionally save SceneLog for debugging/caching
         if self._save_scenes_path:
@@ -201,6 +214,50 @@ class RecipeChef:
         # Stage 3: expand for a beginner. The grounded recipe is the fallback, so a
         # failure here degrades to today's output rather than breaking the request.
         return self._expand_for_beginner(grounded, video_info)
+
+    def _read_keyframes_into(
+        self,
+        scene_log: SceneLog,
+        video_info: VideoInfo,
+        video_path: str,
+        debug: bool = False,
+    ) -> None:
+        """Attach high-res keyframe observations to the SceneLog, in place.
+
+        VLM-guided selection: the micro-action timeline says when ingredients are
+        introduced; those moments get a sharp frame and a reading pass. Scene-cut
+        detection fills in when the timeline yields too few events (fast montages).
+        """
+        from .vlm.keyframes import (
+            _dedupe_and_cap,
+            detect_scene_cut_timestamps,
+            extract_reading_keyframes,
+            select_reading_timestamps,
+        )
+
+        if not scene_log.scenes or not hasattr(self._vlm, "read_keyframes"):
+            return
+
+        timestamps = select_reading_timestamps(scene_log)
+        if len(timestamps) < 3:
+            merged = timestamps + detect_scene_cut_timestamps(video_path)
+            timestamps = _dedupe_and_cap(merged, 14)
+        if not timestamps:
+            return
+
+        start = time.perf_counter()
+        keyframes = extract_reading_keyframes(video_path, timestamps)
+        observations = self._vlm.read_keyframes(video_info, keyframes)
+        scene_log.scenes[0].observations = observations
+        elapsed = time.perf_counter() - start
+
+        if debug:
+            print(f"[Chef] Keyframe reading: {len(keyframes)} frames -> "
+                  f"{len(observations)} observations in {elapsed:.1f}s")
+            for obs in observations:
+                ts = f"{obs.timestamp_seconds:.1f}s" if obs.timestamp_seconds is not None else "?"
+                print(f"  [{ts}] {obs.ingredient or '?'} | amount: {obs.stated_amount or '-'} | "
+                      f"text: {obs.on_screen_text or '-'}")
 
     def _expand_for_beginner(self, grounded: Recipe, video_info: VideoInfo) -> Recipe:
         from .llm.expander import RecipeExpander
