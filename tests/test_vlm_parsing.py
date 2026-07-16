@@ -94,6 +94,66 @@ class TestJsonExtraction:
         assert json.loads(objects[0])["a"] == "value with } brace"
 
 
+class TestScratchpadInsideJson:
+    """The scratchpad is a key of the scene object, not a preamble before it.
+
+    Asking for a free-text STEP 1 before the JSON let the model end its turn once STEP 1
+    was written, returning a scratchpad and no JSON at all - which no parser can rescue.
+    Folding the scratchpad into the object removes the step it could stop after.
+    """
+    SCENE = {
+        "scratchpad": ["[00:05 - 00:07] : Cumin -> Adding to pan"],
+        "summary": "cooking",
+        "entities": [{"name": "Cumin", "type": "ingredient"}],
+        "micro_actions": [
+            {"action": "Adding cumin", "start": "00:05", "end": "00:07", "entity": "Cumin"}
+        ],
+    }
+
+    def test_direct_video_parser_ignores_scratchpad_key(self, vlm):
+        scene = vlm._parse_video_direct_response(json.dumps(self.SCENE), video_duration=60)
+        assert len(scene.micro_actions) == 1
+        assert scene.micro_actions[0].timestamp_seconds == 5.0
+
+    def test_scene_parser_drops_scratchpad_before_model_build(self, vlm):
+        # This one builds SceneDescription(**data), so a stray key reaches the model.
+        scene = vlm._parse_scene_response(json.dumps(self.SCENE), frame_index=3)
+        assert scene.frame_index == 3
+        assert len(scene.micro_actions) == 1
+
+    def test_chunk_parser_accepts_scratchpad_key(self, vlm):
+        data = vlm._parse_timestamp_chunk_response(json.dumps(self.SCENE), [(5.0, "b64")])
+        assert len(data["micro_actions"]) == 1
+
+    def test_fenced_scratchpad_before_json_still_parses(self, vlm):
+        # Belt and braces: a model that ignores the new instruction and fences a scratchpad
+        # first must not take the whole scene down. The old parsers grabbed the first fence.
+        content = (
+            "```\n[00:05 - 00:07] : Cumin -> Adding to pan\n```\n"
+            "```json\n" + json.dumps({k: v for k, v in self.SCENE.items()
+                                      if k != "scratchpad"}) + "\n```"
+        )
+        assert len(vlm._parse_scene_response(content, frame_index=0).micro_actions) == 1
+        assert len(vlm._parse_timestamp_chunk_response(content, [(5.0, "b")])["micro_actions"]) == 1
+
+    @pytest.mark.parametrize("builder", [
+        "_build_video_direct_prompt", "_build_scene_prompt", "_build_timestamp_chunk_prompt",
+    ])
+    def test_no_prompt_asks_for_a_scratchpad_before_the_json(self, vlm, video_info, builder):
+        prompt = _build_any(vlm, builder, video_info)
+        assert "Return ONLY the Scratchpad followed by" not in prompt
+        assert '"scratchpad"' in prompt
+        assert "STEP 2: JSON GENERATION" not in prompt
+
+
+def _build_any(vlm, builder: str, video_info) -> str:
+    """Call a prompt builder regardless of its differing required args."""
+    fn = getattr(vlm, builder)
+    if builder == "_build_timestamp_chunk_prompt":
+        return fn(video_info, [(0.0, "b64"), (10.0, "b64")])
+    return fn(video_info)
+
+
 class TestVideoDirectPrompt:
     def test_transcript_guardrail_only_when_given(self, vlm, video_info):
         with_t = vlm._build_video_direct_prompt(video_info, transcript="add the paprika")

@@ -463,14 +463,17 @@ Cooking videos often are non-linear. They usually begin with a "Preview" or "Her
 - **The Reset Point:** Identify the moment the video cuts from a finished/cooked state to a raw/empty state.
 - **Tagging:** Any action occurring *before* this reset point involving the finished dish must be tagged.
 
-*** STEP 1: VISUAL SCRATCHPAD (Mandatory) ***
-Watch the video chronologically. Create a raw text log of distinct physical movements.
-- Format: [Start MM:SS - End MM:SS] : [Entity] -> [Action]
-- Multitasking: If multiple actions occur simultaneously (e.g., stirring while pouring), list them as SEPARATE lines.
-- Constraint: If nothing significant happens for 5 seconds, do NOT write anything.
+Return a SINGLE valid JSON object and nothing else. Your entire response must begin with '{{' and end with '}}'.
 
-*** STEP 2: JSON GENERATION ***
-Convert your scratchpad into valid JSON.
+Work chronologically through the video and fill the object's keys IN ORDER:
+
+1. "scratchpad" (Mandatory, FIRST key): a raw log of distinct physical movements, one string per line.
+   - Format per entry: "[Start MM:SS - End MM:SS] : [Entity] -> [Action]"
+   - Multitasking: If multiple actions occur simultaneously (e.g., stirring while pouring), list them as SEPARATE entries.
+   - Constraint: If nothing significant happens for 5 seconds, do NOT write an entry.
+2. "summary", "entities", "micro_actions": derived from the scratchpad you just wrote.
+
+The scratchpad is your reasoning, not a preamble - write it inside the JSON, never before it.
 
 CRITICAL FORMATTING RULES:
 1. Do not nest actions. Every action is a separate object.
@@ -479,6 +482,10 @@ CRITICAL FORMATTING RULES:
 
 JSON EXAMPLE (Follow this structure exactly):
 {{
+  "scratchpad": [
+    "[00:00 - 00:05] : Fork -> Taking a bite of the finished lasagna",
+    "[00:28 - 00:30] : Knife -> Slicing cucumber into rounds"
+  ],
   "summary": "...",
   "entities": [ ... ],
   "micro_actions": [
@@ -511,7 +518,7 @@ STRICT ACCURACY RULES:
 5. Entity Consistency: Use exact names from the 'entities' list.
 6. Time Format: "MM:SS".
 
-Return ONLY the Scratchpad followed by the JSON object."""
+Return ONLY the JSON object, with "scratchpad" as its first key."""
 
     def _build_timestamp_chunk_messages(
         self,
@@ -544,19 +551,8 @@ Return ONLY the Scratchpad followed by the JSON object."""
         frames_with_timestamps: list[tuple[float, str]]
     ) -> dict:
         """Extract JSON from chunk response."""
-        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", content)
-        if json_match:
-            json_str = json_match.group(1)
-        else:
-            start = content.find("{")
-            end = content.rfind("}") + 1
-            if start != -1 and end > start:
-                json_str = content[start:end]
-            else:
-                raise ValueError(f"Could not find JSON: {content[:200]}...")
-        
-        data = json.loads(json_str)
-        
+        data = _extract_scene_json(content)
+
         if not isinstance(data.get("entities"), list):
             data["entities"] = []
         if not isinstance(data.get("state_changes"), list):
@@ -811,14 +807,17 @@ Cooking videos often are non-linear. They usually begin with a "Preview" or "Her
 - **The Reset Point:** Identify the moment the video cuts from a finished/cooked state to a raw/empty state.
 - **Tagging:** Any action occurring *before* this reset point involving the finished dish must be tagged.
 
-*** STEP 1: VISUAL SCRATCHPAD (Mandatory) ***
-Watch the video chronologically. Create a raw text log of distinct physical movements.
-- Format: [Start MM:SS - End MM:SS] : [Entity] -> [Action]
-- Multitasking: If multiple actions occur simultaneously (e.g., stirring while pouring), list them as SEPARATE lines.
-- Constraint: If nothing significant happens for 5 seconds, do NOT write anything.
+Return a SINGLE valid JSON object and nothing else. Your entire response must begin with '{{' and end with '}}'.
 
-*** STEP 2: JSON GENERATION ***
-Convert your scratchpad into valid JSON.
+Work chronologically through the video and fill the object's keys IN ORDER:
+
+1. "scratchpad" (Mandatory, FIRST key): a raw log of distinct physical movements, one string per line.
+   - Format per entry: "[Start MM:SS - End MM:SS] : [Entity] -> [Action]"
+   - Multitasking: If multiple actions occur simultaneously (e.g., stirring while pouring), list them as SEPARATE entries.
+   - Constraint: If nothing significant happens for 5 seconds, do NOT write an entry.
+2. "summary", "entities", "micro_actions": derived from the scratchpad you just wrote.
+
+The scratchpad is your reasoning, not a preamble - write it inside the JSON, never before it.
 
 CRITICAL FORMATTING RULES:
 1. Do not nest actions. Every action is a separate object.
@@ -827,6 +826,10 @@ CRITICAL FORMATTING RULES:
 
 JSON EXAMPLE (Follow this structure exactly):
 {{
+  "scratchpad": [
+    "[00:00 - 00:05] : Fork -> Taking a bite of the finished lasagna",
+    "[00:28 - 00:30] : Knife -> Slicing cucumber into rounds"
+  ],
   "summary": "...",
   "entities": [ ... ],
   "micro_actions": [
@@ -859,7 +862,7 @@ STRICT ACCURACY RULES:
 5. Entity Consistency: Use exact names from the 'entities' list.
 6. Time Format: "MM:SS".
 
-Return ONLY the Scratchpad followed by the JSON object."""
+Return ONLY the JSON object, with "scratchpad" as its first key."""
     
     def _build_scene_messages(
         self,
@@ -892,22 +895,12 @@ Return ONLY the Scratchpad followed by the JSON object."""
         frame_indices: Optional[list[int]] = None
     ) -> SceneDescription:
         """Extract JSON from the VLM response and convert to SceneDescription."""
-        # Try to extract JSON from markdown code blocks first
-        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", content)
-        if json_match:
-            json_str = json_match.group(1)
-        else:
-            # If it's raw JSON - find the outermost braces
-            start = content.find("{")
-            end = content.rfind("}") + 1
-            if start != -1 and end > start:
-                json_str = content[start:end]
-            else:
-                raise ValueError(f"Could not find JSON in scene response: {content[:200]}...")
-        
-        # Parse the JSON
-        data = json.loads(json_str)
-        
+        data = _extract_scene_json(content)
+
+        # Reasoning, not a field on the model. SceneDescription(**data) is built from the
+        # whole dict, unlike the direct-video path which names its fields explicitly.
+        data.pop("scratchpad", None)
+
         # Ensure lists exist
         if not isinstance(data.get("entities"), list):
             data["entities"] = []
@@ -1042,7 +1035,14 @@ Return ONLY the Scratchpad followed by the JSON object."""
                     
                     elapsed = time.perf_counter() - start_time
                     print(f"      VLM response received in {elapsed:.2f}s")
-                    
+
+                    # "length" means we hit max_tokens and the JSON is cut off; "stop" with an
+                    # unparseable body means the model ended its turn early instead. The two look
+                    # identical from the parse error alone, so name which one happened.
+                    finish_reason = response.choices[0].finish_reason
+                    if finish_reason != "stop":
+                        print(f"      [VLM] finish_reason={finish_reason}")
+
                     content = response.choices[0].message.content
                     scene = self._parse_video_direct_response(content, video_info.duration_seconds)
                     
@@ -1251,14 +1251,17 @@ VIDEO METADATA:
 Title: {video_info.title}
 Duration: {video_info.duration_seconds} seconds
 {description_section}{transcript_section}
-*** STEP 1: VISUAL SCRATCHPAD (Mandatory) ***
-Watch the video chronologically. Create a raw text log of distinct physical movements.
-- Format: [Start MM:SS - End MM:SS] : [Entity] -> [Action]
-- Multitasking: If multiple actions occur simultaneously (e.g., stirring while pouring), list them as SEPARATE lines with the same timestamp range.
-- Constraint: If nothing significant happens for 5 seconds, do NOT write anything.
+Return a SINGLE valid JSON object and nothing else. Your entire response must begin with '{{' and end with '}}'.
 
-*** STEP 2: JSON GENERATION ***
-Convert your scratchpad into valid JSON.
+Work chronologically through the video and fill the object's keys IN ORDER:
+
+1. "scratchpad" (Mandatory, FIRST key): a raw log of distinct physical movements, one string per line.
+   - Format per entry: "[Start MM:SS - End MM:SS] : [Entity] -> [Action]"
+   - Multitasking: If multiple actions occur simultaneously (e.g., stirring while pouring), list them as SEPARATE entries with the same timestamp range.
+   - Constraint: If nothing significant happens for 5 seconds, do NOT write an entry.
+2. "summary", "entities", "micro_actions": derived from the scratchpad you just wrote.
+
+The scratchpad is your reasoning, not a preamble - write it inside the JSON, never before it.
 
 CRITICAL FORMATTING RULES:
 1. Do not nest actions inside other actions. Every action is a separate object in the main list.
@@ -1267,6 +1270,10 @@ CRITICAL FORMATTING RULES:
 
 JSON EXAMPLE (Follow this structure exactly):
 {{
+  "scratchpad": [
+    "[00:28 - 00:30] : Knife -> Slicing cucumber into rounds",
+    "[00:31 - 00:33] : Smoked paprika -> Sprinkling over cucumber in bowl"
+  ],
   "summary": "Step-by-step preparation of cucumber salad including slicing and seasoning.",
   "entities": [
     {{"name": "Cucumber", "type": "ingredient", "quantity": "2 whole"}},
@@ -1316,7 +1323,7 @@ STRICT ACCURACY RULES:
 9. Stated Amounts: "stated_amount" is ONLY for amounts the video evidences (caption, label, visible
    measuring spoon/cup, or narration). If no source states one, omit the field - never estimate.
 
-Return ONLY the Scratchpad followed by the JSON object."""
+Return ONLY the JSON object, with "scratchpad" as its first key."""
 
     def _parse_video_direct_response(
         self,
