@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { RotateOverlay } from '../components'
+import { ConfirmDialog, RotateOverlay } from '../components'
 import type { Recipe, Step } from '../types'
 
 // A cooldown between step changes: a tap within this window of the previous one is
@@ -13,6 +13,7 @@ interface CookingViewProps {
   /** Owned by App, so stepping out to the recipe and back resumes on this step. */
   currentStep: number
   onStepChange: (step: number) => void
+  /** Leaves the recipe for good - confirmed first, see ExitControls. */
   onExit: () => void
   onViewRecipe: () => void
 }
@@ -189,6 +190,7 @@ export function CookingView({
   onExit,
   onViewRecipe,
 }: CookingViewProps) {
+  const [confirmingExit, setConfirmingExit] = useState(false)
   const step: Step = recipe.steps[currentStep]
   const totalSteps = recipe.steps.length
 
@@ -244,8 +246,36 @@ export function CookingView({
     }
   }
 
+  // The same pair serves the landscape footer and the portrait rotate screen: turning the
+  // phone mid-recipe shouldn't strand the cook with no way out or back to the recipe.
+  // View Recipe keeps `currentStep` (App owns it), so coming back resumes here.
+  const exitControls = (
+    <div className="flex items-center justify-center gap-4 text-white/80">
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          setConfirmingExit(true)
+        }}
+        className="hover:text-white transition-colors"
+      >
+        Exit
+      </button>
+      <span className="text-white/40">|</span>
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          onViewRecipe()
+        }}
+        className="hover:text-white transition-colors"
+      >
+        View Recipe
+      </button>
+    </div>
+  )
+
   return (
-    <RotateOverlay>
+    <>
+    <RotateOverlay actions={exitControls}>
       <div
         className="cooking-mode flex"
         onClick={handleTap}
@@ -303,27 +333,7 @@ export function CookingView({
           </div>
 
           {/* Navigation buttons */}
-          <div className="shrink-0 flex items-center justify-center gap-4 text-white/80">
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onExit()
-              }}
-              className="hover:text-white transition-colors"
-            >
-              Exit
-            </button>
-            <span className="text-white/40">|</span>
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onViewRecipe()
-              }}
-              className="hover:text-white transition-colors"
-            >
-              View Recipe
-            </button>
-          </div>
+          <div className="shrink-0">{exitControls}</div>
         </div>
 
         {/* Right panel - only when there is something to put in it. A step with no
@@ -365,6 +375,17 @@ export function CookingView({
         </div>
       </div>
     </RotateOverlay>
+
+    {/* Outside RotateOverlay so it shows in either orientation, and outside the tap
+        container so dismissing it can't also step the recipe. */}
+    {confirmingExit && (
+      <ConfirmDialog
+        message="Are you sure you want to exit?"
+        onConfirm={onExit}
+        onCancel={() => setConfirmingExit(false)}
+      />
+    )}
+    </>
   )
 }
 

@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { ConfirmDialog } from '../components'
 import type { Provenance, Recipe, Source } from '../types'
 
 interface WarmProgress {
@@ -101,8 +103,16 @@ export function RecipeView({
   onStartCooking,
   onRestart,
 }: RecipeViewProps) {
+  const [confirmingExit, setConfirmingExit] = useState(false)
+
   return (
-    <div className="h-full overflow-y-auto pb-32 scroll-smooth">
+    <div
+      className="h-full overflow-y-auto scroll-smooth"
+      // Clears the fixed button block at the bottom. It's two stacked buttons plus its
+      // own padding, which is taller than the old pb-32 - in portrait that left the last
+      // card (Sources) partly underneath it with no way to scroll further.
+      style={{ paddingBottom: 'calc(11rem + env(safe-area-inset-bottom))' }}
+    >
       {/* Header */}
       <div className="p-6 pt-8">
         <h1 className="text-3xl md:text-4xl font-display font-bold text-white mb-2 animate-fade-in">
@@ -293,12 +303,20 @@ export function RecipeView({
           {cookingButtonLabel({ clipsReady, clipsWarm, hasStartedCooking })}
         </button>
         <button
-          onClick={onRestart}
+          onClick={() => setConfirmingExit(true)}
           className="w-full py-2 text-white/80 hover:text-white transition-colors text-sm"
         >
           Restart Recipe
         </button>
       </div>
+
+      {confirmingExit && (
+        <ConfirmDialog
+          message="Are you sure you want to exit?"
+          onConfirm={onRestart}
+          onCancel={() => setConfirmingExit(false)}
+        />
+      )}
     </div>
   )
 }

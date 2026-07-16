@@ -2,13 +2,19 @@ import { useOrientation } from '../hooks'
 
 interface RotateOverlayProps {
   children: React.ReactNode
+  /**
+   * Rendered under the rotate message. Turning the phone shouldn't trap the cook on a
+   * screen with no way off it, so cooking mode passes its Exit / View Recipe buttons
+   * through to here.
+   */
+  actions?: React.ReactNode
 }
 
 /**
  * Shows "Please rotate your phone" overlay when in portrait mode
  * during cooking mode
  */
-export function RotateOverlay({ children }: RotateOverlayProps) {
+export function RotateOverlay({ children, actions }: RotateOverlayProps) {
   const orientation = useOrientation()
 
   if (orientation === 'landscape') {
@@ -57,6 +63,8 @@ export function RotateOverlay({ children }: RotateOverlayProps) {
       <p className="text-white/80 text-center max-w-xs">
         For the best cooking experience, please rotate your device to landscape mode
       </p>
+
+      {actions && <div className="mt-8">{actions}</div>}
     </div>
   )
 }

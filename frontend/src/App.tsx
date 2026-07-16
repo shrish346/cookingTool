@@ -229,12 +229,9 @@ export default function App() {
     setState('cooking')
   }, [])
 
-  // Both ways out of cooking keep the step, so coming back resumes where they left off.
-  // Only Restart Recipe clears it.
-  const handleExitCooking = useCallback(() => {
-    setState('recipe')
-  }, [])
-
+  // View Recipe keeps `cookingStep`, so coming back resumes where they left off. Exit
+  // is a real exit - it lands on `handleRestart` below and throws the recipe away - so
+  // both views confirm before calling it.
   const handleViewRecipe = useCallback(() => {
     setState('recipe')
   }, [])
@@ -288,7 +285,7 @@ export default function App() {
           recipe={recipe}
           currentStep={cookingStep}
           onStepChange={setCookingStep}
-          onExit={handleExitCooking}
+          onExit={handleRestart}
           onViewRecipe={handleViewRecipe}
         />
       )}
