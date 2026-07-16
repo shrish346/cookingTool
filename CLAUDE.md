@@ -49,14 +49,19 @@ Two helper scripts start Redis + backend (bound to `0.0.0.0`) + frontend with `V
 
 ### Tests
 
-There is no pytest setup and no unit tests. Everything in `tests/` is a standalone script that hits real APIs and downloads real videos:
-
 ```bash
-python tests/test_pipeline.py [youtube_url]   # end-to-end VLM→LLM→clips, writes ./test_output/clips/
-python tests/test_frames.py                   # FrameExtractor only
+python3 -m pytest              # the real suite: fast, no API keys, no network
+pip install -r requirements-dev.txt   # just pytest
 ```
 
-Requires a populated `.env` (copy from `env.example`) and `ffmpeg` on PATH. These cost API credits — don't run them casually.
+`tests/*.py` is a pytest suite covering the deterministic seams: schema coercion (`coerce_ingredient_amount`), keyframe selection/extraction, VLM/LLM response parsers, prompt-builder contracts, recipe assembly (merge/gather/prune), chef orchestration with fake adapters, `extract_video_id`, `CacheManager` (fake Redis/S3), and the API endpoints via `TestClient` with `dependency_overrides`. A few tests build a synthetic fixture video and are marked `ffmpeg` (auto-skip when ffmpeg is missing). `test_schemas.py` asserts the backend/frontend `SCHEMA_VERSION` mirror — it fails if you bump one side only.
+
+`tests/manual/` holds the old standalone diagnostics (real downloads, real model calls, cost credits — see its README). pytest does not collect them:
+
+```bash
+python3 tests/manual/test_pipeline.py [youtube_url]   # legacy frame-chunk path end-to-end
+python3 tests/manual/test_frames.py                   # FrameExtractor only
+```
 
 ## Architecture
 
