@@ -13,7 +13,7 @@ def _new_id() -> str:
     return uuid4().hex[:8]
 
 
-Provenance = Literal["video", "reference", "model"]
+Provenance = Literal["video", "reference", "model", "video_description"]
 """Where a piece of the recipe came from.
 
 video     - observed in the source video (grounded in micro_action_ids)

@@ -30,12 +30,7 @@ DEFAULT_EXPANSION_MODEL = "google/gemini-2.5-flash"
 # published recipe, citing a Source minted for the video itself under this reserved ID.
 # The model cites the ID; only code mints the Source, because prune_dangling_references
 # nulls any source_id that doesn't resolve.
-#
-# Spell it out. This value is shown to the model inside the PROVENANCE block, one line under
-# the `provenance` enum - a short opaque token there ("vd") reads as a fourth legal provenance
-# value, and the model wrote it into `provenance` instead of `source_id`. Nothing but code
-# mints or reads this ID, so its only job is to be unmistakable at the point of use.
-VIDEO_DESCRIPTION_SOURCE_ID = "creator-description"
+VIDEO_DESCRIPTION_SOURCE_ID = "video_description"
 
 
 class RecipeExpander:
