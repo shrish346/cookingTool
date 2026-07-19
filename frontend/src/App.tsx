@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Analytics } from '@vercel/analytics/react'
 import { LandingView, LoadingView, RecipeView, CookingView } from './views'
 import { useSavedRecipe } from './hooks'
 import { api, ApiError } from './api/client'
 import { prefetchClips } from './api/prefetchClips'
 import { fetchStoredRecipe, requestedRecipeId } from './api/storedRecipe'
+import { trackEvent, platformFromVideoId } from './lib/analytics'
 import type { Recipe, StatusResponse } from './types'
 
 type AppState = 'landing' | 'loading' | 'recipe' | 'cooking'
@@ -54,6 +56,7 @@ export default function App() {
           setRecipe(stored)
           setClipsReady(stored.clips_ready)
           setState('recipe')
+          trackEvent('shared_recipe_opened', { platform: platformFromVideoId(storedId) })
         })
         .catch((err: Error) => setError(err.message))
       return
@@ -82,20 +85,31 @@ export default function App() {
     }
 
     let cancelled = false
+    let opened = false
+    let lastDone = 0
+    let lastTotal = urls.filter(Boolean).length
     setClipsWarm(false)
 
-    const openCooking = () => {
-      if (!cancelled) setClipsWarm(true)
+    const openCooking = (timedOut: boolean) => {
+      if (cancelled || opened) return
+      opened = true
+      setClipsWarm(true)
+      trackEvent(timedOut ? 'clips_timed_out' : 'clips_warmed', {
+        warmed_done: lastDone,
+        warmed_total: lastTotal,
+      })
     }
 
-    const timer = setTimeout(openCooking, CLIP_WARM_TIMEOUT_MS)
+    const timer = setTimeout(() => openCooking(true), CLIP_WARM_TIMEOUT_MS)
 
     void prefetchClips(urls, (done, count) => {
       if (cancelled) return
+      lastDone = done
+      lastTotal = count
       setWarmed({ done, total: count })
     }).then(() => {
       clearTimeout(timer)
-      openCooking()
+      openCooking(false)
     })
 
     return () => {
@@ -126,10 +140,19 @@ export default function App() {
           setProgress(status.progress)
           setStatusMessage(status.message)
           setState('recipe')
+          trackEvent('recipe_generated', {
+            platform: platformFromVideoId(status.recipe.video_id ?? jobId),
+            step_count: status.recipe.steps.length,
+            expansion_failed: status.recipe.expansion_failed ?? false,
+          })
         } else if (status.status === 'failed') {
           clearInterval(pollInterval)
           setError(status.error || 'Failed to generate recipe')
           setState('landing')
+          trackEvent('recipe_failed', {
+            error: status.error ?? 'Failed to generate recipe',
+            platform: platformFromVideoId(jobId),
+          })
         } else {
           // Pipeline progress. Not applied on completion, so the bar doesn't jump to
           // 100 and then back down for the clip download.
@@ -184,6 +207,7 @@ export default function App() {
       if (!validation.valid) {
         setError(validation.error || 'Invalid URL')
         setIsValidating(false)
+        trackEvent('validation_failed', { error: validation.error ?? 'Invalid URL' })
         return
       }
 
@@ -192,7 +216,10 @@ export default function App() {
       setJobId(processResponse.video_id)
       setProgress(5)
       setStatusMessage(processResponse.message)
-      
+
+      const platform = platformFromVideoId(processResponse.video_id)
+      trackEvent('recipe_submitted', { platform })
+
       // If already completed (cached), go directly to recipe
       if (processResponse.status === 'completed') {
         const status = await api.getStatus(processResponse.job_id)
@@ -205,6 +232,7 @@ export default function App() {
           })
           setState('recipe')
           setIsValidating(false)
+          trackEvent('recipe_cache_hit', { platform })
           return
         }
       }
@@ -220,6 +248,10 @@ export default function App() {
         setError('Something went wrong. Please try again.')
       }
       setIsValidating(false)
+      trackEvent('submit_error', {
+        error: err instanceof Error ? err.message : String(err),
+        is_api_error: err instanceof ApiError,
+      })
     }
   }, [setSavedRecipe])
 
@@ -227,7 +259,10 @@ export default function App() {
   const handleStartCooking = useCallback(() => {
     setHasStartedCooking(true)
     setState('cooking')
-  }, [])
+    trackEvent('cooking_started', {
+      platform: platformFromVideoId(recipe?.video_id ?? jobId),
+    })
+  }, [recipe, jobId])
 
   // View Recipe keeps `cookingStep`, so coming back resumes where they left off. Exit
   // is a real exit - it lands on `handleRestart` below and throws the recipe away - so
@@ -237,6 +272,7 @@ export default function App() {
   }, [])
 
   const handleRestart = useCallback(() => {
+    trackEvent('cooking_exited', { from_state: state })
     setRecipe(null)
     setClipsReady(false)
     setClipsWarm(false)
@@ -248,11 +284,12 @@ export default function App() {
     setError(undefined)
     setSavedRecipe({ recipe: null, savedAt: null })
     setState('landing')
-  }, [setSavedRecipe])
+  }, [state, setSavedRecipe])
 
   // Render current view
   return (
     <div className="h-full bg-peach overflow-hidden">
+      <Analytics />
       {state === 'landing' && (
         <LandingView
           onSubmit={handleSubmit}
