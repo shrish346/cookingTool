@@ -25,6 +25,36 @@ load_dotenv()
 
 DEFAULT_EXPANSION_MODEL = "google/gemini-2.5-flash"
 
+# Web-grounding is scoped to published recipes on purpose. Left to OpenRouter's default
+# `:online` behavior, the search auto-derives a query from the whole prompt (including the
+# raw short-form video title) and happily returns recent news, listicles and social posts.
+# We drive the `web` plugin explicitly instead: cap the results, hand it a recipe-focused
+# search prompt, and hard-exclude the domains that never carry a measured recipe.
+WEB_MAX_RESULTS = 3
+
+# News, social/video, forums and general-reference: none of these give quantities/times for
+# a specific dish, and they're the sources that bleed in as "recent articles". `exclude_domains`
+# filters the results regardless of engine, so this is the load-bearing lever, not the prompt.
+WEB_EXCLUDE_DOMAINS = [
+    # News
+    "nytimes.com", "cnn.com", "bbc.com", "theguardian.com", "washingtonpost.com",
+    "forbes.com", "apnews.com", "reuters.com", "usatoday.com", "nypost.com",
+    "dailymail.co.uk", "businessinsider.com", "huffpost.com", "buzzfeed.com",
+    # Social / video / forums
+    "reddit.com", "youtube.com", "tiktok.com", "instagram.com", "facebook.com",
+    "twitter.com", "x.com", "pinterest.com", "quora.com",
+    # General reference (no measured recipes)
+    "wikipedia.org",
+]
+
+WEB_SEARCH_PROMPT = (
+    "The results below are published recipes for the dish being made. Use their ingredient "
+    "quantities, temperatures and cooking times to fill the gaps the video left. Only use pages "
+    "that are an actual recipe for this specific dish - ignore anything that is a news article, a "
+    "blog roundup/listicle, or otherwise not a recipe. Cite each recipe you use as a markdown link "
+    "named by its site."
+)
+
 # The creator's description is evidence, but it isn't the camera - an amount read off
 # a caption was never shown being measured. It gets `reference` provenance like any
 # published recipe, citing a Source minted for the video itself under this reserved ID.
@@ -48,11 +78,20 @@ class RecipeExpander:
             web_grounding = os.getenv("RECIPE_WEB_GROUNDING", "1") == "1"
         self._web_grounding = web_grounding
 
-        # OpenRouter's `:online` suffix auto-injects web search results for the query,
-        # so the model can pull real quantities from published recipes rather than
-        # guessing. Billed per result (~$0.02/request at the default 5).
-        if self._web_grounding and not self._model.endswith(":online"):
-            self._model += ":online"
+        # Drive OpenRouter's `web` plugin explicitly rather than via the `:online` shorthand,
+        # so the search is scoped to published recipes instead of whatever query `:online`
+        # would auto-derive from the prompt (which pulls in recent news/articles). Billed per
+        # result (~$0.02 each). The model id stays plain - the plugin is passed on the call.
+        self._plugins = (
+            [{
+                "id": "web",
+                "max_results": WEB_MAX_RESULTS,
+                "search_prompt": WEB_SEARCH_PROMPT,
+                "exclude_domains": WEB_EXCLUDE_DOMAINS,
+            }]
+            if self._web_grounding
+            else None
+        )
 
         self._client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
@@ -65,18 +104,30 @@ class RecipeExpander:
 
     def expand(self, grounded: Recipe, video_info: VideoInfo) -> Recipe:
         """Return an expanded Recipe. Raises on any failure; the caller falls back."""
-        prompt = self._build_prompt(grounded, video_info)
+        messages = self._build_messages(grounded, video_info)
 
+        # `plugins` rides in `extra_body`; the OpenAI SDK forwards it verbatim to OpenRouter.
+        kwargs = {"extra_body": {"plugins": self._plugins}} if self._plugins else {}
         response = self._client.chat.completions.create(
             model=self._model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             max_tokens=8192,
             temperature=0.5,
+            **kwargs,
         )
 
         return self._parse_response(response.choices[0].message.content, grounded, video_info)
 
-    def _build_prompt(self, grounded: Recipe, video_info: VideoInfo) -> str:
+    def _build_messages(self, grounded: Recipe, video_info: VideoInfo) -> list[dict]:
+        """Split into a stable `system` message (persona + rules) and a per-dish `user`
+        message (the grounded skeleton). The rules never change per request, so they sit in
+        `system` where the model weights them most; only the dish data varies per call."""
+        return [
+            {"role": "system", "content": self._system_prompt()},
+            {"role": "user", "content": self._user_prompt(grounded, video_info)},
+        ]
+
+    def _user_prompt(self, grounded: Recipe, video_info: VideoInfo) -> str:
         dish = grounded.dish_query or grounded.title
         steps_text = self._format_grounded_steps(grounded)
         ingredients_text = self._format_grounded_ingredients(grounded)
@@ -96,10 +147,33 @@ over a published recipe when both give an amount; it's this dish, not a similar 
 {video_info.description[:1500]}
 """
 
+        # Lead with the dish name: whatever query the web search auto-derives from this user
+        # message should anchor on the dish, not the raw short-form video title below it.
+        return f"""THE DISH: {dish}
+SOURCE VIDEO (context only): {video_info.title} ({video_info.duration_seconds}s)
+{description_section}
+A cooking video was analyzed and produced the recipe skeleton below. Follow the rules and output
+format you were given. Remember: the video is a BASELINE, not a spec - fill in what's missing, but
+only what's worth saying.
+
+GROUNDED STEPS (what the camera actually saw):
+{steps_text}
+
+INGREDIENTS OBSERVED:
+{ingredients_text}
+
+TOOLS OBSERVED: {tools_text}
+
+Return ONLY the JSON object."""
+
+    def _system_prompt(self) -> str:
         web_rule = (
-            "You have web search available. Look up real published recipes for this dish and use "
-            "their quantities, temperatures and times to fill the gaps. Cite them in `sources`, and "
-            "set `provenance: \"reference\"` with the matching `source_id` on anything you took from them."
+            "You have web search results below, scoped to published recipes for this dish. Use them "
+            "ONLY to fill in real quantities, temperatures and times the video skipped. Treat any "
+            "result that is a news article, listicle, or social post as noise and ignore it - those "
+            "are not recipes. Cite every recipe you actually use in `sources` and set "
+            "`provenance: \"reference\"` with the matching `source_id` on anything taken from it. "
+            "Never cite a page you did not use."
             if self._web_grounding else
             "You do not have web search. Fill gaps from your own cooking knowledge and mark them "
             "`provenance: \"model\"`. Leave `sources` empty."
@@ -119,21 +193,11 @@ THE RULE: explain what a casual cook wouldn't already know, and NOTHING they obv
 they smell nutty but before they smoke" or "keep the pan moving so the garlic doesn't burn" is
 signal - keep it.
 
-THE DISH: {dish}
-SOURCE VIDEO: {video_info.title} ({video_info.duration_seconds}s)
-{description_section}
-A cooking video was analyzed and produced the recipe skeleton below. **The video is a BASELINE, not a
-spec.** It shows what your reader wants to make - it does NOT contain everything they need to know to
-make it. Short-form cooking videos skip prep, skip measurements, skip resting, and never explain the
-technique that actually matters. Fill in what's missing - but only what's worth saying.
-
-GROUNDED STEPS (what the camera actually saw):
-{steps_text}
-
-INGREDIENTS OBSERVED:
-{ingredients_text}
-
-TOOLS OBSERVED: {tools_text}
+You will be given a recipe skeleton produced from a cooking video, plus the dish name and (often) the
+creator's description. **The video is a BASELINE, not a spec.** It shows what your reader wants to
+make - it does NOT contain everything they need to know to make it. Short-form cooking videos skip
+prep, skip measurements, skip resting, and never explain the technique that actually matters. Fill in
+what's missing - but only what's worth saying.
 
 YOUR TASK:
 

@@ -162,20 +162,100 @@ class TestCoerceProvenance:
 
 class TestPrompt:
     def test_spice_identity_rule_present(self, expander, grounded, video_info):
-        prompt = expander._build_prompt(grounded, video_info)
+        # Task rules live in the stable system prompt.
+        prompt = expander._system_prompt()
         assert "Resolve generic ingredient identities" in prompt
         assert "amount_text" in prompt
 
     def test_description_section_only_when_present(self, expander, grounded, video_info):
-        with_desc = expander._build_prompt(grounded, video_info)
+        # Per-dish data (incl. the creator's description) lives in the user prompt.
+        with_desc = expander._user_prompt(grounded, video_info)
         assert "CREATOR'S VIDEO DESCRIPTION" in with_desc
         assert VIDEO_DESCRIPTION_SOURCE_ID in with_desc
 
         video_info.description = None
-        without = expander._build_prompt(grounded, video_info)
+        without = expander._user_prompt(grounded, video_info)
         assert "CREATOR'S VIDEO DESCRIPTION" not in without
 
     def test_grounded_ingredients_render_amount_text(self, expander, grounded, video_info):
-        prompt = expander._build_prompt(grounded, video_info)
+        prompt = expander._user_prompt(grounded, video_info)
         assert "- spices: some" in prompt
         assert "- rice: 2.0 cups" in prompt
+
+
+class TestMessageHierarchy:
+    def test_system_then_user(self, expander, grounded, video_info):
+        messages = expander._build_messages(grounded, video_info)
+        assert [m["role"] for m in messages] == ["system", "user"]
+
+    def test_persona_and_rules_in_system_not_user(self, expander, grounded, video_info):
+        messages = expander._build_messages(grounded, video_info)
+        system, user = messages[0]["content"], messages[1]["content"]
+        assert "You are writing a recipe" in system
+        assert "YOUR TASK" in system
+        assert "You are writing a recipe" not in user
+
+    def test_dish_leads_the_user_message(self, expander, grounded, video_info):
+        # The dish name anchors whatever query the web search derives from the user message,
+        # so it must lead - ahead of the raw (newsy) video title.
+        user = expander._build_messages(grounded, video_info)[1]["content"]
+        assert user.lstrip().startswith("THE DISH: chicken curry")
+
+    def test_web_rule_scopes_to_recipes_when_grounding_on(self, expander):
+        system = expander._system_prompt()
+        assert "scoped to published recipes" in system
+        assert "not recipes" in system  # news/listicle/social called out as noise
+
+    def test_web_rule_flips_off_when_grounding_off(self):
+        ex = RecipeExpander.__new__(RecipeExpander)
+        ex._web_grounding = False
+        system = ex._system_prompt()
+        assert "do not have web search" in system.lower()
+        assert "Leave `sources` empty" in system
+
+
+class TestWebPluginConfig:
+    def test_online_suffix_replaced_by_explicit_plugin(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+        ex = RecipeExpander(web_grounding=True)
+        # The model id stays plain; the plugin drives web search instead.
+        assert not ex.model_name.endswith(":online")
+        assert ex._plugins is not None
+        plugin = ex._plugins[0]
+        assert plugin["id"] == "web"
+        assert plugin["max_results"] == 3
+        assert "reddit.com" in plugin["exclude_domains"]
+        assert "nytimes.com" in plugin["exclude_domains"]
+        assert "recipe" in plugin["search_prompt"].lower()
+
+    def test_no_plugin_when_grounding_off(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+        ex = RecipeExpander(web_grounding=False)
+        assert ex._plugins is None
+        assert not ex.model_name.endswith(":online")
+
+    def test_expand_passes_plugins_in_extra_body(self, monkeypatch, grounded, video_info):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+        ex = RecipeExpander(web_grounding=True)
+
+        captured = {}
+
+        class _FakeMessage:
+            content = _response()
+
+        class _FakeChoice:
+            message = _FakeMessage()
+
+        class _FakeResponse:
+            choices = [_FakeChoice()]
+
+        def _fake_create(**kwargs):
+            captured.update(kwargs)
+            return _FakeResponse()
+
+        ex._client.chat.completions.create = _fake_create
+        ex.expand(grounded, video_info)
+
+        assert captured["extra_body"]["plugins"] == ex._plugins
+        assert not captured["model"].endswith(":online")
+        assert [m["role"] for m in captured["messages"]] == ["system", "user"]
