@@ -1,0 +1,12 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "watchPatterns": [
+      "backend/**",
+      "src/**",
+      "requirements.txt",
+      "downloader_worker.py",
+      "railway.json"
+    ]
+  }
+}
