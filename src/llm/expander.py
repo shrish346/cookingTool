@@ -30,6 +30,11 @@ DEFAULT_EXPANSION_MODEL = "google/gemini-2.5-flash"
 # published recipe, citing a Source minted for the video itself under this reserved ID.
 # The model cites the ID; only code mints the Source, because prune_dangling_references
 # nulls any source_id that doesn't resolve.
+#
+# Spell it out. This value is shown to the model inside the PROVENANCE block, one line under
+# the `provenance` enum - a short opaque token there ("vd") reads as a fourth legal provenance
+# value, and the model wrote it into `provenance` instead of `source_id`. Nothing but code
+# mints or reads this ID, so its only job is to be unmistakable at the point of use.
 VIDEO_DESCRIPTION_SOURCE_ID = "video_description"
 
 
@@ -186,11 +191,14 @@ YOUR TASK:
 
 Target 8-15 steps. Add a step only when it earns its place - resist padding.
 
-PROVENANCE - tag every ingredient, tool and step with where it came from:
+PROVENANCE - tag every ingredient, tool and step with where it came from. `provenance` is
+ALWAYS exactly one of these three words and NOTHING else - it is never a source id:
   "video"     - the camera showed this
   "reference" - you took it from a published recipe, or from the creator's description
                 (set source_id: the recipe's id, or "{VIDEO_DESCRIPTION_SOURCE_ID}" for the description)
   "model"     - your own cooking knowledge; an estimate
+"{VIDEO_DESCRIPTION_SOURCE_ID}" is a SOURCE ID - it goes in the `source_id` field alongside
+`provenance: "reference"`, never in the `provenance` field itself.
 
 OUTPUT - return ONLY a JSON object:
 
