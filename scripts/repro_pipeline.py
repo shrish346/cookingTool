@@ -72,18 +72,81 @@ def main() -> int:
         lambda stage: print(f"      -> stage: {stage}"),
     )
 
-    print("[4/4] Done.")
-    print(f"      Title:       {recipe.title}")
-    print(f"      Steps:       {len(recipe.steps)}")
-    print(f"      Ingredients: {len(recipe.ingredients)}")
+    print("[4/4] Done.\n")
+    _print_recipe(recipe)
+    return 0
+
+
+def _prov(item) -> str:
+    """Compact provenance tag, e.g. 'video' or 'reference->s1'."""
+    tag = getattr(item, "provenance", None) or "?"
+    src = getattr(item, "source_id", None)
+    return f"{tag}->{src}" if src else tag
+
+
+def _amount(ing) -> str:
+    if ing.quantity is not None:
+        return f"{ing.quantity} {ing.unit or ''}".strip()
+    return ing.amount_text or "amount not shown"
+
+
+def _print_recipe(recipe) -> None:
+    print("=" * 72)
+    print(recipe.title)
+    if recipe.description:
+        print(recipe.description)
+    meta = [f"serves {recipe.servings}"]
+    if recipe.difficulty:
+        meta.append(recipe.difficulty)
+    if recipe.prep_time_minutes:
+        meta.append(f"prep {recipe.prep_time_minutes}m")
+    if recipe.cook_time_minutes:
+        meta.append(f"cook {recipe.cook_time_minutes}m")
+    if recipe.cuisine:
+        meta.append(recipe.cuisine)
+    print("  ".join(meta))
     if getattr(recipe, "expansion_failed", False):
-        print("      NOTE: expansion_failed=True (serving grounded recipe)")
+        print("\n!! expansion_failed=True — this is the raw grounded (pass-1) recipe")
+    print("=" * 72)
+
+    print(f"\nINGREDIENTS ({len(recipe.ingredients)}):")
+    for ing in recipe.ingredients:
+        prep = f", {ing.preparation}" if ing.preparation else ""
+        opt = " (optional)" if ing.optional else ""
+        print(f"  - {ing.name}: {_amount(ing)}{prep}{opt}  [{_prov(ing)}]")
+        if ing.note:
+            print(f"      note: {ing.note}")
+
+    if recipe.tools:
+        print(f"\nTOOLS ({len(recipe.tools)}):")
+        for tool in recipe.tools:
+            ess = "essential" if tool.essential else "optional"
+            sub = f", sub: {tool.substitute}" if tool.substitute else ""
+            print(f"  - {tool.name} ({ess}){sub}  [{_prov(tool)}]")
+
+    if recipe.sources:
+        print(f"\nSOURCES ({len(recipe.sources)}):")
+        for src in recipe.sources:
+            site = f" — {src.site}" if src.site else ""
+            url = f" ({src.url})" if src.url else ""
+            print(f"  - [{src.id}] {src.title}{site}{url}")
+
+    print(f"\nSTEPS ({len(recipe.steps)}):")
     for step in recipe.steps:
         span = ""
         if step.start_timestamp_seconds is not None:
             span = f" [{step.start_timestamp_seconds:.1f}s-{step.end_timestamp_seconds:.1f}s]"
-        print(f"      {step.order}. {step.instruction[:70]}{span}")
-    return 0
+        elif not step.has_video_clip:
+            span = " [no clip]"
+        dur = f" (~{step.duration_minutes}m)" if step.duration_minutes else ""
+        print(f"\n  {step.order}. [{step.kind}] {step.title or ''}{dur}{span}  [{_prov(step)}]")
+        print(f"     {step.instruction}")
+        if step.detail:
+            print(f"     detail: {step.detail}")
+        if step.doneness_cue:
+            print(f"     done when: {step.doneness_cue}")
+        for tip in step.tips or []:
+            print(f"     tip: {tip}")
 
 
 if __name__ == "__main__":

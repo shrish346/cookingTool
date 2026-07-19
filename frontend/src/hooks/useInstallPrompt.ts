@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useLocalStorage } from './useLocalStorage'
 
 export type InstallPlatform = 'ios' | 'android' | 'other'
 
@@ -22,7 +21,21 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
 }
 
-const DISMISSED_KEY = 'chefs-loop-install-dismissed'
+/**
+ * Where "already answered this session" is remembered. sessionStorage, not localStorage,
+ * on purpose: it's scoped to the tab's session, so a reload within the same visit stays
+ * quiet but a fresh visit later brings the reminder back.
+ */
+const SESSION_DISMISSED_KEY = 'chefs-loop-install-dismissed'
+
+function readSessionDismissed(): boolean {
+  if (typeof sessionStorage === 'undefined') return false
+  try {
+    return sessionStorage.getItem(SESSION_DISMISSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
 
 /** UA tokens of the embedded browsers our traffic actually arrives through. */
 const IN_APP_TOKENS =
@@ -79,16 +92,17 @@ function isInstalled(): boolean {
  * a browser tab the URL bar eats that. Nothing else in the app tells anyone installing is
  * even possible.
  *
- * Suppressed on desktop (the copy names a phone OS), when already installed, and forever
- * once dismissed.
+ * Shown once per browser session: on desktop it warns the visitor to switch to a phone,
+ * on a phone it nudges them to install. Suppressed only when already installed. Dismissal
+ * lives in sessionStorage, so it reappears on the next visit but not on a same-session
+ * reload.
  */
 export function useInstallPrompt() {
-  const [dismissed, setDismissed] = useLocalStorage<boolean>(DISMISSED_KEY, false)
   const [platform] = useState<InstallPlatform>(detectPlatform)
   const [installed, setInstalled] = useState(isInstalled)
-  // Closes the dialog for this render, independently of the stored flag. The flag alone
-  // can't do it: under `?install=`, the override deliberately outranks it.
-  const [hidden, setHidden] = useState(false)
+  // Suppresses the dialog for the rest of this browser session. Seeded from sessionStorage
+  // so a reload after "Ignore"/"Ok" stays quiet; a new session starts fresh.
+  const [hidden, setHidden] = useState(readSessionDismissed)
 
   // Held in a ref, not state: it's a one-shot handle to fire on Ok, not something the UI
   // renders. `nativeReady` is the render-visible half.
@@ -107,10 +121,7 @@ export function useInstallPrompt() {
 
     // Covers installs that happen outside our dialog (the browser's own menu), so the
     // prompt can't linger for someone who has already done it.
-    const onInstalled = () => {
-      setInstalled(true)
-      setDismissed(true)
-    }
+    const onInstalled = () => setInstalled(true)
 
     window.addEventListener('beforeinstallprompt', onBeforeInstall)
     window.addEventListener('appinstalled', onInstalled)
@@ -118,24 +129,28 @@ export function useInstallPrompt() {
       window.removeEventListener('beforeinstallprompt', onBeforeInstall)
       window.removeEventListener('appinstalled', onInstalled)
     }
-  }, [setDismissed])
+  }, [])
 
   const forced = forcedOverride()
   const inApp = forced
     ? forced.inApp
     : typeof navigator !== 'undefined' && IN_APP_TOKENS.test(navigator.userAgent)
 
-  const mode: InstallMode = inApp ? 'in-app' : nativeReady ? 'native' : 'instructions'
+  // Desktop never gets 'native': there's no home screen to install to, so a computer only
+  // ever sees the "switch to your phone" warning, not an install button.
+  const mode: InstallMode =
+    inApp ? 'in-app' : platform !== 'other' && nativeReady ? 'native' : 'instructions'
 
-  // The override ignores the dismissed flag too, so the prompt can be reopened by reload
-  // rather than by hand-clearing localStorage between looks.
-  const shouldShow =
-    !hidden && (Boolean(forced) || (!dismissed && !installed && platform !== 'other'))
+  const shouldShow = !hidden && (Boolean(forced) || !installed)
 
   const dismiss = useCallback(() => {
     setHidden(true)
-    setDismissed(true)
-  }, [setDismissed])
+    try {
+      sessionStorage.setItem(SESSION_DISMISSED_KEY, '1')
+    } catch {
+      // sessionStorage can throw in private modes; the in-memory `hidden` still holds.
+    }
+  }, [])
 
   /**
    * Opens the browser's real install dialog. Resolves false when there was no event to
