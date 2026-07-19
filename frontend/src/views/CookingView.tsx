@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ConfirmDialog, RotateOverlay } from '../components'
+import { useWakeLock } from '../hooks'
+import { hasSeenHint, markHintSeen, type HintId } from '../lib/hintStore'
 import type { Recipe, Step } from '../types'
 
 // A cooldown between step changes: a tap within this window of the previous one is
@@ -91,9 +93,9 @@ function formatQuantity(quantity: number): string {
  * Only the current layer plays; neighbours are mounted, paused and hidden. They preload
  * so the *next* step's first frame is already decoded when the user advances - which is
  * what makes the transition instant on browsers that pre-decode a paused, offscreen
- * video. iOS/WebKit may defer that decode until play(); the spinner below covers that
+ * video. iOS/WebKit may defer that decode until play(); the skeleton below covers that
  * window (and any far jump that lands outside the preloaded set) so the box is never
- * blank, only briefly spinning.
+ * blank, only briefly shimmering.
  */
 function ClipLayer({ url, isCurrent }: { url: string; isCurrent: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -132,18 +134,20 @@ function ClipLayer({ url, isCurrent }: { url: string; isCurrent: boolean }) {
           isCurrent ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       />
-      {isCurrent && !ready && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          {/* Faster than the default 1s spin: this only shows for a genuinely-loading
-              settled clip, so a quicker spin reads as "actively working", distinct from
-              the calm scrub loader. */}
-          <div
-            className="w-10 h-10 rounded-full border-2 border-white/20 border-t-white/70 animate-spin"
-            style={{ animationDuration: '0.6s' }}
-          />
-        </div>
-      )}
+      {isCurrent && !ready && <ClipSkeleton />}
     </>
+  )
+}
+
+/**
+ * Shimmer placeholder that fills the clip frame while a video is loading -
+ * either in the browser (ClipLayer) or still rendering server-side (clipPending).
+ */
+function ClipSkeleton() {
+  return (
+    <div className="absolute inset-0 bg-white/5 overflow-hidden">
+      <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
+    </div>
   )
 }
 
@@ -180,6 +184,136 @@ function ClipStack({
 }
 
 /**
+ * Tracks whether a scroll container overflows and where it sits, driving the
+ * scroll arrows. Re-run via deps whenever the scroller remounts (key={step.id})
+ * or changes size class, so the ref points at the fresh node.
+ */
+function useScrollState(
+  ref: React.RefObject<HTMLDivElement>,
+  deps: React.DependencyList
+) {
+  const [state, setState] = useState({ canScroll: false, atTop: true, atBottom: true })
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const update = () => {
+      // ±1px tolerances absorb sub-pixel rounding on mobile, where scrollTop
+      // can settle a fraction short of the end.
+      const next = {
+        canScroll: el.scrollHeight > el.clientHeight + 1,
+        atTop: el.scrollTop <= 1,
+        atBottom: el.scrollTop + el.clientHeight >= el.scrollHeight - 1,
+      }
+      setState((prev) =>
+        prev.canScroll === next.canScroll &&
+        prev.atTop === next.atTop &&
+        prev.atBottom === next.atBottom
+          ? prev
+          : next
+      )
+    }
+    update()
+    el.addEventListener('scroll', update, { passive: true })
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    return () => {
+      el.removeEventListener('scroll', update)
+      observer.disconnect()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+
+  return state
+}
+
+/**
+ * The messy-hands scroll controls: chevron glyphs with a full 44px tap target
+ * each, so a knuckle-tap lands without needing a clean fingertip.
+ *
+ * Dimmed ends use the disabled attribute, never pointer-events-none: a disabled
+ * button swallows the tap entirely, while pointer-events-none would let it fall
+ * through to the whole-screen tap navigator and change the step - the exact
+ * accident these arrows exist to prevent. Live taps stopPropagation for the
+ * same reason.
+ */
+function ScrollArrows({
+  atTop,
+  atBottom,
+  onScroll,
+  horizontal = false,
+}: {
+  atTop: boolean
+  atBottom: boolean
+  onScroll: (dir: 1 | -1) => void
+  horizontal?: boolean
+}) {
+  const arrow = (dir: 1 | -1) => (
+    <button
+      type="button"
+      aria-label={dir === -1 ? 'Scroll instructions up' : 'Scroll instructions down'}
+      disabled={dir === -1 ? atTop : atBottom}
+      onClick={(e) => {
+        e.stopPropagation()
+        onScroll(dir)
+      }}
+      className="w-11 h-11 flex items-center justify-center rounded-full text-white/50 transition-colors hover:text-white/90 hover:bg-white/10 active:bg-white/15 disabled:opacity-25 disabled:hover:bg-transparent disabled:hover:text-white/50"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="w-5 h-5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <polyline points={dir === -1 ? '6 15 12 9 18 15' : '6 9 12 15 18 9'} />
+      </svg>
+    </button>
+  )
+
+  return (
+    <div className={`flex gap-1 ${horizontal ? '' : 'flex-col'}`}>
+      {arrow(-1)}
+      {arrow(1)}
+    </div>
+  )
+}
+
+/** Keep in sync with the hint-life animation duration in tailwind.config.js. */
+const HINT_DURATION_MS = 8000
+
+/**
+ * One-time teaching label for the tap-to-navigate zones, shown on the gather
+ * steps. pointer-events-none is the point: the hint sits inside the very zone
+ * it describes, so tapping "on" it falls through and actually navigates.
+ */
+function TapHint({ side, text }: { side: 'left' | 'right'; text: string }) {
+  const [visible, setVisible] = useState(true)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setVisible(false), HINT_DURATION_MS)
+    return () => clearTimeout(timer)
+  }, [])
+
+  if (!visible) return null
+  return (
+    <div
+      className={`absolute top-3 z-10 pointer-events-none flex items-center gap-1.5 bg-black/20 backdrop-blur-sm rounded-full px-3 py-1.5 text-[11px] text-white/60 ${
+        side === 'right'
+          ? 'right-4 animate-hint-life-right'
+          : 'left-4 animate-hint-life-left'
+      }`}
+    >
+      {side === 'left' && <span className="text-white/80 animate-nudge-left">‹</span>}
+      <span>{text}</span>
+      {side === 'right' && <span className="text-white/80 animate-nudge-right">›</span>}
+    </div>
+  )
+}
+
+/**
  * Landscape cooking mode with video loops and step navigation
  */
 
@@ -193,6 +327,10 @@ export function CookingView({
   const [confirmingExit, setConfirmingExit] = useState(false)
   const step: Step = recipe.steps[currentStep]
   const totalSteps = recipe.steps.length
+
+  // Cooking means the phone is propped up with wet hands nearby - keep the
+  // screen on for exactly as long as this view is mounted.
+  useWakeLock()
 
   const hasVideo = Boolean(step?.video_clip_url)
   // A step the video never showed will never get a clip, so don't sit on a spinner
@@ -213,6 +351,41 @@ export function CookingView({
     (step?.detail?.length ?? 0) +
     (step?.doneness_cue?.length ?? 0)
   const dense = charCount > 400
+
+  // Scroll arrows for the description, so messy hands can page through a long
+  // step without touch-scrolling. Deps cover the scroller's remount (key=step.id)
+  // and everything that changes its width or type size.
+  const scrollerRef = useRef<HTMLDivElement>(null)
+  const { canScroll, atTop, atBottom } = useScrollState(scrollerRef, [
+    step?.id,
+    showPanel,
+    dense,
+  ])
+  const scrollByChunk = (dir: 1 | -1) => {
+    const el = scrollerRef.current
+    if (!el) return
+    // 0.65 x the viewport keeps a third of the previous chunk visible for continuity.
+    el.scrollBy({ top: dir * el.clientHeight * 0.65, behavior: 'smooth' })
+  }
+
+  // One-time tap-navigation hints on the two gather steps, once per recipe.
+  // Marked seen on first show, so revisiting the step never replays them.
+  const recipeKey = recipe.video_id ?? recipe.source_url ?? recipe.title
+  const [activeHint, setActiveHint] = useState<HintId | null>(null)
+  useEffect(() => {
+    const hint: HintId | null =
+      step?.kind === 'gather_tools'
+        ? 'tap-next'
+        : step?.kind === 'gather_ingredients'
+          ? 'tap-prev'
+          : null
+    if (!hint || hasSeenHint(recipeKey, hint)) {
+      setActiveHint(null)
+      return
+    }
+    markHintSeen(recipeKey, hint)
+    setActiveHint(hint)
+  }, [step?.kind, recipeKey])
 
   // No prefetching here: App warms every clip in step order as soon as the recipe
   // lands, which is strictly earlier and covers more steps than this view could.
@@ -290,13 +463,14 @@ export function CookingView({
           </div>
 
           {/* Step title and instruction. Centered while it fits, scrolls once it doesn't. */}
-          <div className="flex-1 min-h-0 flex flex-col justify-center ml-9">
+          <div className="relative flex-1 min-h-0 flex flex-col justify-center ml-9">
             {/* Keyed by step so it remounts on navigation. Without that, React reuses
                 the node and a step scrolled halfway down hands its scroll offset to the
                 next step, which opens partway into its own text. */}
             <div
               key={step.id}
-              className={`overflow-y-auto py-4 pr-4 animate-slide-up ${showPanel ? 'max-w-lg' : 'max-w-3xl'}`}
+              ref={scrollerRef}
+              className={`overflow-y-auto py-4 animate-slide-up ${showPanel && canScroll ? 'pr-16' : 'pr-4'} ${showPanel ? 'max-w-lg' : 'max-w-3xl'}`}
             >
               {step.kind === 'prep_component' && (
                 <span className="inline-block mb-3 px-2 py-0.5 rounded-full bg-white/15 text-white/70 text-[11px] uppercase tracking-wider">
@@ -330,7 +504,23 @@ export function CookingView({
                 </p>
               )}
             </div>
+
+            {/* Scroll arrows, panel mode: a vertical rail on the boundary between
+                the text and the video. Hidden entirely when the step fits. */}
+            {showPanel && canScroll && (
+              <div className="absolute right-0 top-1/2 -translate-y-1/2">
+                <ScrollArrows atTop={atTop} atBottom={atBottom} onScroll={scrollByChunk} />
+              </div>
+            )}
           </div>
+
+          {/* Scroll arrows, full-width mode: a horizontal pair at the bottom left,
+              just above the exit controls. */}
+          {!showPanel && canScroll && (
+            <div className="shrink-0 ml-9 mb-2">
+              <ScrollArrows atTop={atTop} atBottom={atBottom} onScroll={scrollByChunk} horizontal />
+            </div>
+          )}
 
           {/* Navigation buttons */}
           <div className="shrink-0">{exitControls}</div>
@@ -348,15 +538,32 @@ export function CookingView({
                 {hasVideo ? (
                   <ClipStack recipe={recipe} currentStep={currentStep} />
                 ) : (
-                  /* clipPending: the clip is still rendering server-side. */
-                  <div className="w-full h-full flex flex-col items-center justify-center text-white/60">
-                    <div className="w-10 h-10 mb-3 rounded-full border-2 border-white/20 border-t-white/70 animate-spin" />
-                    <span className="text-sm">Preparing this clip…</span>
+                  /* clipPending: the clip is still rendering server-side. Same
+                     skeleton as a loading clip; the label distinguishes the wait. */
+                  <div className="relative w-full h-full flex items-center justify-center text-white/60">
+                    <ClipSkeleton />
+                    <span className="relative text-sm">Preparing this clip…</span>
                   </div>
                 )}
               </div>
             )}
           </div>
+        )}
+
+        {/* One-time tap-navigation hints, keyed so each restarts its 8s life. */}
+        {activeHint === 'tap-next' && (
+          <TapHint
+            key="tap-next"
+            side="right"
+            text="Tap right side of screen to move to next step"
+          />
+        )}
+        {activeHint === 'tap-prev' && (
+          <TapHint
+            key="tap-prev"
+            side="left"
+            text="Tap left side of screen to move to previous step"
+          />
         )}
 
         {/* Tap zones indicator (subtle) */}

@@ -34,6 +34,11 @@ export default {
         'fade-in': 'fadeIn 0.5s ease-out',
         'slide-up': 'slideUp 0.4s ease-out',
         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+        shimmer: 'shimmer 1.5s infinite',
+        'hint-life-right': 'hintLifeRight 8s ease-in-out both',
+        'hint-life-left': 'hintLifeLeft 8s ease-in-out both',
+        'nudge-right': 'nudgeRight 1.6s ease-in-out infinite',
+        'nudge-left': 'nudgeLeft 1.6s ease-in-out infinite',
       },
       keyframes: {
         fadeIn: {
@@ -43,6 +48,31 @@ export default {
         slideUp: {
           '0%': { opacity: '0', transform: 'translateY(20px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        // Sweeps a highlight across a skeleton; the element starts at
+        // -translate-x-full so the run is edge to edge.
+        shimmer: {
+          '100%': { transform: 'translateX(100%)' },
+        },
+        // Whole lifecycle of a tap hint in one pass: slide in from the edge
+        // it points at, hold, slide back out. Duration owns the 8s budget.
+        hintLifeRight: {
+          '0%': { opacity: '0', transform: 'translateX(12px)' },
+          '5%, 92%': { opacity: '1', transform: 'translateX(0)' },
+          '100%': { opacity: '0', transform: 'translateX(12px)' },
+        },
+        hintLifeLeft: {
+          '0%': { opacity: '0', transform: 'translateX(-12px)' },
+          '5%, 92%': { opacity: '1', transform: 'translateX(0)' },
+          '100%': { opacity: '0', transform: 'translateX(-12px)' },
+        },
+        nudgeRight: {
+          '0%, 100%': { transform: 'translateX(0)' },
+          '50%': { transform: 'translateX(3px)' },
+        },
+        nudgeLeft: {
+          '0%, 100%': { transform: 'translateX(0)' },
+          '50%': { transform: 'translateX(-3px)' },
         },
       },
     },
