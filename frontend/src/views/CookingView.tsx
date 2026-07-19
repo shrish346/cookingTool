@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ConfirmDialog, RotateOverlay } from '../components'
 import { useWakeLock } from '../hooks'
 import { hasSeenHint, markHintSeen, type HintId } from '../lib/hintStore'
@@ -194,6 +194,17 @@ function useScrollState(
 ) {
   const [state, setState] = useState({ canScroll: false, atTop: true, atBottom: true })
 
+  // Reset before paint on every step change. Without this, canScroll carried
+  // over from the previous step renders the arrows into the fresh step first,
+  // and the space they take shrinks the column enough that borderline text
+  // now overflows - so the arrows justify their own existence and stick.
+  // Resetting first means the measurement below always sees the arrow-free
+  // layout, and arrows appear only when the text overflows *that*.
+  useLayoutEffect(() => {
+    setState({ canScroll: false, atTop: true, atBottom: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+
   useEffect(() => {
     const el = ref.current
     if (!el) return
@@ -361,12 +372,43 @@ export function CookingView({
     showPanel,
     dense,
   ])
+  // Where the last arrow tap asked to scroll to. Chaining from this instead of
+  // the live position matters when a step needs several taps: a tap during the
+  // previous tap's smooth animation would otherwise abort it and measure from
+  // the mid-flight position, which reads as a jerky cut instead of one glide.
+  const scrollTargetRef = useRef<number | null>(null)
   const scrollByChunk = (dir: 1 | -1) => {
     const el = scrollerRef.current
     if (!el) return
+    const max = el.scrollHeight - el.clientHeight
+    const pending = scrollTargetRef.current
+    const inFlight = pending != null && Math.abs(pending - el.scrollTop) > 2
     // 0.65 x the viewport keeps a third of the previous chunk visible for continuity.
-    el.scrollBy({ top: dir * el.clientHeight * 0.65, behavior: 'smooth' })
+    const target = Math.max(
+      0,
+      Math.min(max, (inFlight ? pending : el.scrollTop) + dir * el.clientHeight * 0.65)
+    )
+    scrollTargetRef.current = target
+    el.scrollTo({ top: target, behavior: 'smooth' })
   }
+
+  // A manual scroll makes the pending arrow target stale - drop it so the next
+  // tap measures from wherever the finger left the text. Keyed by step so the
+  // listeners re-attach to the remounted scroller and the target resets.
+  useEffect(() => {
+    scrollTargetRef.current = null
+    const el = scrollerRef.current
+    if (!el) return
+    const clear = () => {
+      scrollTargetRef.current = null
+    }
+    el.addEventListener('wheel', clear, { passive: true })
+    el.addEventListener('touchstart', clear, { passive: true })
+    return () => {
+      el.removeEventListener('wheel', clear)
+      el.removeEventListener('touchstart', clear)
+    }
+  }, [step?.id])
 
   // One-time tap-navigation hints on the two gather steps, once per recipe.
   // Marked seen on first show, so revisiting the step never replays them.
