@@ -1,14 +1,15 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Analytics } from '@vercel/analytics/react'
-import { LandingView, LoadingView, RecipeView, CookingView } from './views'
+import { LandingView, BrowseView, LoadingView, RecipeView, CookingView } from './views'
 import { useSavedRecipe } from './hooks'
 import { api, ApiError } from './api/client'
 import { prefetchClips } from './api/prefetchClips'
 import { fetchStoredRecipe, requestedRecipeId } from './api/storedRecipe'
 import { trackEvent, platformFromVideoId } from './lib/analytics'
+import { SITE_NOTICE, BROWSE_RECIPES, noticeMode } from './config/site'
 import type { Recipe, StatusResponse } from './types'
 
-type AppState = 'landing' | 'loading' | 'recipe' | 'cooking'
+type AppState = 'landing' | 'browse' | 'loading' | 'recipe' | 'cooking'
 
 // How long the loading screen will wait on clip downloads before showing the recipe
 // anyway. Long enough for a handful of clips on a slow phone connection; short enough
@@ -16,10 +17,14 @@ type AppState = 'landing' | 'loading' | 'recipe' | 'cooking'
 const CLIP_WARM_TIMEOUT_MS = 20_000
 
 export default function App() {
-  // App state
-  const [state, setState] = useState<AppState>('landing')
+  // App state. Notice mode (config/site.ts) swaps the link-entry landing for the notice
+  // and the stored-recipe list; every other state behaves identically in both modes.
+  const [state, setState] = useState<AppState>(noticeMode ? 'browse' : 'landing')
   const [isValidating, setIsValidating] = useState(false)
   const [error, setError] = useState<string>()
+
+  // The recipe being pulled out of storage from the browse list, if any.
+  const [browseLoadingId, setBrowseLoadingId] = useState<string>()
   
   // Loading state
   const [jobId, setJobId] = useState<string>()
@@ -46,7 +51,9 @@ export default function App() {
   // On mount: `?recipe=<video_id>` reads that recipe straight from object storage and
   // skips the API entirely, so the recipe and cooking views can be worked on without
   // running the backend. It takes precedence over whatever is in localStorage.
-  // Otherwise, rehydrate the saved recipe as usual.
+  // Otherwise, rehydrate the saved recipe as usual - except in notice mode, where a
+  // returning visitor should land on the notice rather than be dropped straight back
+  // into whatever they last opened, having never seen why the pipeline is offline.
   useEffect(() => {
     const storedId = requestedRecipeId()
 
@@ -62,7 +69,7 @@ export default function App() {
       return
     }
 
-    if (savedRecipe.recipe && state === 'landing') {
+    if (!noticeMode && savedRecipe.recipe && state === 'landing') {
       setRecipe(savedRecipe.recipe)
       setClipsReady(savedRecipe.recipe.clips_ready)
       setState('recipe')
@@ -255,6 +262,25 @@ export default function App() {
     }
   }, [setSavedRecipe])
 
+  // Open a recipe from the browse list. Reads it straight out of object storage, the
+  // same path `?recipe=` takes - no API call, so this works with the backend down.
+  // Deliberately does not write to localStorage: that single slot belongs to a recipe
+  // the user actually generated, and notice mode doesn't rehydrate from it anyway.
+  const handleSelectStored = useCallback((videoId: string) => {
+    setError(undefined)
+    setBrowseLoadingId(videoId)
+
+    fetchStoredRecipe(videoId)
+      .then((stored) => {
+        setRecipe(stored)
+        setClipsReady(stored.clips_ready)
+        setState('recipe')
+        trackEvent('browse_recipe_opened', { platform: platformFromVideoId(videoId) })
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBrowseLoadingId(undefined))
+  }, [])
+
   // Navigation handlers
   const handleStartCooking = useCallback(() => {
     setHasStartedCooking(true)
@@ -283,7 +309,7 @@ export default function App() {
     setProgress(0)
     setError(undefined)
     setSavedRecipe({ recipe: null, savedAt: null })
-    setState('landing')
+    setState(noticeMode ? 'browse' : 'landing')
   }, [state, setSavedRecipe])
 
   // Render current view
@@ -298,6 +324,16 @@ export default function App() {
         />
       )}
       
+      {state === 'browse' && (
+        <BrowseView
+          notice={SITE_NOTICE}
+          recipes={BROWSE_RECIPES}
+          onSelect={handleSelectStored}
+          loadingId={browseLoadingId}
+          error={error}
+        />
+      )}
+
       {state === 'loading' && (
         <LoadingView
           progress={progress}
@@ -314,6 +350,8 @@ export default function App() {
           hasStartedCooking={hasStartedCooking}
           onStartCooking={handleStartCooking}
           onRestart={handleRestart}
+          exitLabel={noticeMode ? 'Back to recipes' : undefined}
+          confirmOnExit={!noticeMode}
         />
       )}
 

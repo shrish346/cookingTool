@@ -16,6 +16,7 @@ type EventName =
   | 'cooking_started'
   | 'cooking_exited'
   | 'shared_recipe_opened'
+  | 'browse_recipe_opened'
 
 // Vercel's track() only accepts flat props whose values are string | number | boolean | null.
 type EventProps = Record<string, string | number | boolean | null>

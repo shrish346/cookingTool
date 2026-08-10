@@ -13,7 +13,14 @@
 
 import type { Recipe } from '../types'
 
-const STORAGE_BASE = import.meta.env.VITE_RECIPE_BASE_URL as string | undefined
+// The Worker host is baked in rather than required from the environment: notice mode
+// (config/site.ts) depends on this in production, and `frontend/.env` is gitignored, so
+// relying on VITE_RECIPE_BASE_URL being set on the deploy host is a silent breakage
+// waiting to happen. It's a public, credential-free URL. The env var still overrides.
+const DEFAULT_STORAGE_BASE = 'https://makerai-clips.shrishvishnu06.workers.dev'
+
+const STORAGE_BASE =
+  (import.meta.env.VITE_RECIPE_BASE_URL as string | undefined) || DEFAULT_STORAGE_BASE
 
 /** The video id to load, from `?recipe=<video_id>`. */
 export function requestedRecipeId(): string | null {
@@ -21,10 +28,6 @@ export function requestedRecipeId(): string | null {
 }
 
 export async function fetchStoredRecipe(videoId: string): Promise<Recipe> {
-  if (!STORAGE_BASE) {
-    throw new Error('Set VITE_RECIPE_BASE_URL to load a recipe straight from storage.')
-  }
-
   const url = `${STORAGE_BASE.replace(/\/+$/, '')}/${videoId}/recipe.json`
   const res = await fetch(url)
 

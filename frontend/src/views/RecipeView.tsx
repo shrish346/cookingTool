@@ -17,6 +17,13 @@ interface RecipeViewProps {
   hasStartedCooking: boolean
   onStartCooking: () => void
   onRestart: () => void
+  /** Wording for the exit button. Defaults to the destructive "throw this away" sense. */
+  exitLabel?: string
+  /**
+   * Whether leaving needs confirming. True where exiting discards the recipe; false in
+   * notice mode, where exit just returns to a list the recipe can be reopened from.
+   */
+  confirmOnExit?: boolean
 }
 
 /**
@@ -102,6 +109,8 @@ export function RecipeView({
   hasStartedCooking,
   onStartCooking,
   onRestart,
+  exitLabel = 'Restart Recipe',
+  confirmOnExit = true,
 }: RecipeViewProps) {
   const [confirmingExit, setConfirmingExit] = useState(false)
 
@@ -303,10 +312,10 @@ export function RecipeView({
           {cookingButtonLabel({ clipsReady, clipsWarm, hasStartedCooking })}
         </button>
         <button
-          onClick={() => setConfirmingExit(true)}
+          onClick={() => (confirmOnExit ? setConfirmingExit(true) : onRestart())}
           className="w-full py-2 text-white/80 hover:text-white transition-colors text-sm"
         >
-          Restart Recipe
+          {exitLabel}
         </button>
       </div>
 
