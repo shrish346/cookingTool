@@ -121,7 +121,7 @@ class Step(BaseModel):
     instruction: str
     detail: Optional[str] = Field(default=None, description="Expanded hand-holding explanation for a total beginner")
     doneness_cue: Optional[str] = Field(default=None, description="How the cook knows this step worked")
-    duration_minutes: Optional[int] = None
+    duration_minutes: Optional[float] = None
     tips: Optional[list[str]] = None
     # Entity references into Recipe.ingredients / Recipe.tools. Groundwork for
     # recipe mutation: changing an ingredient means regenerating only the steps

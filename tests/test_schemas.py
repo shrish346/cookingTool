@@ -126,3 +126,10 @@ def test_schema_version_mirrored_in_frontend():
 def test_recipe_carries_current_schema_version():
     recipe = Recipe(title="t", ingredients=[], steps=[], servings=1)
     assert recipe.schema_version == SCHEMA_VERSION
+
+
+def test_step_accepts_sub_minute_duration():
+    # Short-form videos produce ~30s steps; models emit 0.5. An int field
+    # rejected this and failed the whole recipe in pass 1.
+    assert Step(order=1, instruction="stir", duration_minutes=0.5).duration_minutes == 0.5
+    assert Step(order=1, instruction="boil", duration_minutes=5).duration_minutes == 5
