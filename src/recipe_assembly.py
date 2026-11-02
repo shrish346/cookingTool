@@ -135,8 +135,7 @@ def build_gather_steps(recipe: Recipe) -> Recipe:
             title="Gather Your Ingredients",
             instruction="Measure everything out into small bowls before you start cooking.",
             detail=(
-                "Chefs call this mise en place - everything in its place. Once the pan is hot, "
-                "things move fast, and you won't have time to measure. Do it now, not later."
+                "Once the pan is hot, things move fast, and you won't have time to measure. Do it now, not later."
             ),
             ingredient_ids=[ing.id for ing in recipe.ingredients],
             provenance="model",
