@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ConfirmDialog, RotateOverlay } from '../components'
 import { useWakeLock } from '../hooks'
 import { hasSeenHint, markHintSeen, type HintId } from '../lib/hintStore'
+import { formatDuration } from '../lib/stepText'
 import type { Recipe, Step } from '../types'
 
 // A cooldown between step changes: a tap within this window of the previous one is
@@ -357,6 +358,7 @@ export function CookingView({
   // Long steps used to overflow their column and ride up over the step counter. The
   // column now scrolls instead, and the type scales down first so that scrolling is
   // the exception rather than the norm.
+  const duration = formatDuration(step?.duration_minutes)
   const charCount =
     (step?.instruction?.length ?? 0) +
     (step?.detail?.length ?? 0) +
@@ -540,9 +542,9 @@ export function CookingView({
                   {step.doneness_cue}
                 </p>
               )}
-              {step.duration_minutes && (
+              {duration && (
                 <p className="text-white/60 mt-4">
-                  ⏱️ {step.duration_minutes} minutes
+                  ⏱️ {duration}
                 </p>
               )}
             </div>
